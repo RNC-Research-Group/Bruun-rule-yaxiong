@@ -36,7 +36,7 @@ apply Bruun's rule to calculate the R for unit sea level rise (S=1).
 buffer_dist here should be the same as preprocess2_dunepeak.py
 isexportplot=0 or 1 # 0 = do not export transect plots; 1 = export every transect plot (time-consuming)
 
-5 step5_addSLR.py
+5. step5_addSLR.py
 add SLE scenario to the R calculated in step4_bruunrule.py
 buffer_dist here should be the same as preprocess2_dunepeak.py
 confidence_level, year, percentile and scenario should be same as preprocess2_SLRscenario.py
