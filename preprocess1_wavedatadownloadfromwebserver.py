@@ -16,21 +16,25 @@ from bs4 import BeautifulSoup
 import os
 
 # --- Settings ---
-#input
-variable='t0m1'
+# input
+variable = "t0m1"
 
 base_url = f"https://wave.storm-surge.cloud.edu.au/WHACS/{variable}_NZ/"
 current_script = os.path.abspath(__file__)
-grandparent_folder =  os.path.dirname(os.path.dirname(current_script))
+grandparent_folder = os.path.dirname(os.path.dirname(current_script))
 
-#output
-output_folder = os.path.join(grandparent_folder,f"input\wavedata\whacs_{variable}")#f"data/whacs_{variable}"
+# output
+output_folder = os.path.join(
+    grandparent_folder, f"input\wavedata\whacs_{variable}"
+)  # f"data/whacs_{variable}"
 os.makedirs(output_folder, exist_ok=True)
 
 print("Accessing WHACS site ...")
 response = requests.get(base_url)
 if response.status_code != 200:
-    raise ConnectionError(f"Failed to access {base_url} (status {response.status_code})")
+    raise ConnectionError(
+        f"Failed to access {base_url} (status {response.status_code})"
+    )
 
 # --- Parse HTML to find all .nc files ---
 soup = BeautifulSoup(response.text, "html.parser")
