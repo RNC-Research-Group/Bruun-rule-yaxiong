@@ -12,18 +12,20 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from tqdm import tqdm
+from shapely.geometry import LineString
+import contextily as ctx
 
 # input shoreline points
-inputshorelinepoints = r"input\shorelinepoints"
+inputshorelinepoints = r"input/shorelinepoints"
 shorelinepointfilename = "JaMoNoRaSoWa"  # "JaMoNoRaSoWa"#Wa
 inputshorelinepointsfilename = f"lastestuniquepoints_{shorelinepointfilename}.gpkg"
 
 ## input SLR
-IDposition_folder = r"input\SLR_OCC"
+IDposition_folder = r"input/SLR_OCC"
 IDposition_filename = "NZ_VLM_final_May24.csv"
-SLR_folder = r"input\SLR_OCC"
+SLR_folder = r"input/SLR_OCC"
 SLR_filename = "NZSeaRise_proj_novlm.csv"
-outputloc = "input\SLR"
+outputloc = "input/SLR"
 
 # output figure
 outputfigname = f"{shorelinepointfilename}_SLR_match.png"
@@ -105,57 +107,29 @@ unique_matched = np.sort(matched["index_right"].unique())
 
 print("plotting...")
 
-fig2, ax2 = plt.subplots(figsize=(100, 80))
-# fig2, ax2 = plt.subplots(figsize=(6, 4))
-n_c = len(unique_matched)
+lines = gpd.GeoDataFrame({"site": matched.site}, geometry=
+    matched.apply(
+        lambda row: gpd.GeoSeries(
+            LineString([(row["point_X"], row["point_Y"]), (row["SLR_X"], row["SLR_Y"])])
+        ),
+        axis=1,
+    )[0],
+    crs=matched.crs,
+)
 
-colors = cm.rainbow(np.linspace(0, 1, n_c))
+ax = lines.to_crs(epsg=3857).plot("site", figsize=(10,8), linewidth=0.5, cmap="tab20")
+ctx.add_basemap(
+    ax,
+    source=ctx.providers.Esri.WorldImagery
+)
 
-for i, color in tqdm(
-    zip(unique_matched, colors), total=n_c, desc="Drawing connections"
-):
-    subset = matched[matched["index_right"] == i]
-    n_subset = len(subset)
-    plt.scatter(
-        matched.loc[matched["index_right"] == i, "point_X"],
-        matched.loc[matched["index_right"] == i, "point_Y"],
-        color=color,
-        s=0.5,
-        alpha=0.4,
-        edgecolors=color,
-        marker="o",
-        zorder=1,  # label='points'
-    )
-    plt.scatter(
-        matched.loc[matched["index_right"] == i, "SLR_X"],
-        matched.loc[matched["index_right"] == i, "SLR_Y"],
-        color=color,
-        s=0.5,
-        alpha=0.4,
-        edgecolors=color,
-        marker="s",
-        label=f"SLR points {i:.0f}: ({n_subset:.0f})",
-        zorder=2,
-    )
-
-    for _, row in subset.iterrows():
-        ax2.plot(
-            [row["point_X"], row["SLR_X"]],
-            [row["point_Y"], row["SLR_Y"]],
-            color=color,
-            linewidth=0.1,
-            alpha=0.1,
-            zorder=3,
-        )
-    del row
-
-ax2.set_title(
-    f"{shorelinepointfilename}_SLR_match total SLR points: {n_c}", fontsize=40
+ax.set_title(
+    f"{shorelinepointfilename}_SLR_match total SLR points: {len(unique_matched)}", fontsize=40
 )
 plt.axis("off")
 matched["Unique_ID"] = matched["Unique_ID"].astype(float).astype(int).astype(str)
 
-fig2.savefig(
+ax.get_figure().savefig(
     os.path.join(grandparent_folder, outputloc, outputfigname),
     dpi=300,
     bbox_inches="tight",
