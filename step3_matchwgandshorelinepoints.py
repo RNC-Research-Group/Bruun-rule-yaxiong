@@ -14,11 +14,12 @@ from shapely.geometry import Point, LineString
 import os
 import matplotlib.cm as cm
 from scipy.spatial import cKDTree
+from tqdm.contrib.concurrent import process_map
 
 # input
-inputcoastlineloc = r"input\coastline"
-inputshorelinepoints = r"input\shorelinepoints"
-inputWGloc = r"input\wavedata\WGselected"
+inputcoastlineloc = r"input/coastline"
+inputshorelinepoints = r"input/shorelinepoints"
+inputWGloc = r"input/wavedata/WGselected"
 shorelinepointfilename = "JaMoNoRaSoWa"
 wavedatafilename = f"wavedatasum_{shorelinepointfilename}_1979-01-01_2024-01-01.gpkg"
 inputshorelinepointsfilename = f"lastestuniquepoints_{shorelinepointfilename}.gpkg"
@@ -103,29 +104,30 @@ distances, indices = tree.query(coords_tr, k=num_nearst_WG)
 
 rows_intersection = []
 
-# or i, (dist_row, idx_row) in enumerate(tqdm(zip(distances, indices), desc="Processing transects", ncols=80)):
-for i, (dist_row, idx_row) in tqdm(
-    enumerate(zip(distances, indices)),
-    total=len(distances),  # <-- needed for percentage and ETA
-    desc="Processing distances",  # label shown before the bar
-    ncols=80,  # optional, sets display width
-    unit="row",  # optional, shows “xx%|###| 100/500 [time] rows/s”
-):
+# Was single-threaded
+# 47/229154 [00:16<21:47:03,  2.92row/s]
+# Now, using process_map parallel processing
+# 2511/229154 [00:30<20:10, 187.30it/s]
+
+def process_row(i):
+    dist_row = distances[i]
+    idx_row = indices[i]
     ux1 = (
-        lastestuniquepoints.loc[i, "ux1"]
+        lastestuniquepoints.ux1[i]
         if "ux1" in lastestuniquepoints.columns
         else np.nan
     )
     uy1 = (
-        lastestuniquepoints.loc[i, "uy1"]
+        lastestuniquepoints.uy1[i]
         if "uy1" in lastestuniquepoints.columns
         else np.nan
     )
     Unique_ID = (
-        lastestuniquepoints.loc[i, "Unique_ID"]
+        lastestuniquepoints.Unique_ID[i]
         if "Unique_ID" in lastestuniquepoints.columns
         else pd.nan
     )
+    rows = []
 
     for dist, idx in zip(np.atleast_1d(dist_row), np.atleast_1d(idx_row)):
         # --- build a vector from transect to wave point
@@ -158,7 +160,7 @@ for i, (dist_row, idx_row) in tqdm(
 
         CD_value = gdf_WG.iloc[idx]["CD"] if "CD" in gdf_WG.columns else np.nan
 
-        rows_intersection.append(
+        rows.append(
             {
                 "transect_id": i,
                 "point_X": x0,
@@ -176,7 +178,10 @@ for i, (dist_row, idx_row) in tqdm(
                 "geometry": Point(x0, y0),
             }
         )
+    return rows
 
+rows_intersection = pd.concat(process_map(process_row, range(len(lastestuniquepoints)), chunksize=10), ignore_index=True)
+print(rows_intersection)
 
 # convert to GeoDataFrame of lines
 transect_wp_lines = gpd.GeoDataFrame(
@@ -204,7 +209,7 @@ fig2, ax2 = plt.subplots(figsize=(60, 40))
 n_c = len(unique_transect_wp_index_right)
 colors = cm.rainbow(np.linspace(0, 1, n_c))
 coastline.plot(ax=ax2, color="blue", label="coastline", linewidth=0.5, zorder=0)
-for i, color in zip(unique_transect_wp_index_right, colors):
+for i, color in tqdm(zip(unique_transect_wp_index_right, colors)):
     subset = transect_wp[transect_wp["index_right"] == i]
     n_subset = len(subset)
     plt.scatter(

@@ -29,7 +29,6 @@ in current code, T12hr/year is the mean of T01_12h_y, T02_12h_y, T0m1_12h_y, and
 
 3. step3_matchwgandshorelinepoints.py
 match shoreline points from NZCCD to wave points from WHACS.
-for all NZCCD points, it takes 24 hrs to run.
 
 4. step4_bruunrule.py
 apply Bruun's rule to calculate the R for unit sea level rise (S=1).
