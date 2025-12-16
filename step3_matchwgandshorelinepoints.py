@@ -15,6 +15,7 @@ import os
 import matplotlib.cm as cm
 from scipy.spatial import cKDTree
 from tqdm.contrib.concurrent import process_map
+from itertools import chain
 
 # input
 inputcoastlineloc = r"input/coastline"
@@ -180,7 +181,9 @@ def process_row(i):
         )
     return rows
 
-rows_intersection = pd.concat(process_map(process_row, range(len(lastestuniquepoints)), chunksize=10), ignore_index=True)
+results = process_map(process_row, range(len(lastestuniquepoints)), chunksize=10)
+chained_rows = chain.from_iterable(results)
+rows_intersection = pd.concat(chained_rows, ignore_index=True)
 print(rows_intersection)
 
 # convert to GeoDataFrame of lines
