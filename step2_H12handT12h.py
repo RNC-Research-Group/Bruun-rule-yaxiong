@@ -11,6 +11,7 @@ import pandas as pd
 import numpy as np
 import xarray as xr
 import geopandas as gpd
+from tqdm.auto import tqdm
 
 # input
 inputloc = r"input/wavedata"
@@ -48,7 +49,8 @@ n_points = len(target_points)
 data_dict = {}
 
 # === Loop through all variables ===
-for var in variables:
+# 5/5 [22:03<00:00, 264.80s/it]
+for var in tqdm(variables):
     print(f"\n📘 Processing variable: {var}")
 
     folder = os.path.join(grandparent_folder, inputloc, f"whacs_{var}")
@@ -57,7 +59,7 @@ for var in variables:
     var_all = []  # store monthly aligned data
     time_all = []  # store time vectors
 
-    for f in all_files:
+    for f in tqdm(all_files):
         parts = f.split("_")[-1].replace(".nc", "")
         start_str, end_str = parts.split("-")
         start = pd.to_datetime(start_str, format="%Y%m%d%H%M")
@@ -65,7 +67,7 @@ for var in variables:
 
         if (end >= mindate) and (start <= maxdate):
             filepath = os.path.join(folder, f)
-            print(f"  Reading {f}")
+            #print(f"  Reading {f}")
             ds = xr.open_dataset(filepath)
 
             seapoint = ds["seapoint"].values
@@ -83,7 +85,7 @@ for var in variables:
             # Fill matching data
             var_aligned[:, idx_ref] = var_data[:, idx_cur]
 
-            print(f"    {len(common)} / {n_points} seapoints matched")
+            #print(f"    {len(common)} / {n_points} seapoints matched")
 
             var_all.append(var_aligned)
             time_all.append(time)
@@ -109,7 +111,7 @@ time = time_all  # time vector, same for all
 
 # Create an empty list to collect results
 sum_results = []
-for i in range(n_points):
+for i in tqdm(range(n_points)):
     hs_i = hs[:, i]
     t01_i = t01[:, i]
     t02_i = t02[:, i]
@@ -181,7 +183,7 @@ vars_to_plot = [
 ]
 
 # Loop over variables and create one figure per variable
-for var in vars_to_plot:
+for var in tqdm(vars_to_plot):
     fig, ax = plt.subplots(figsize=(8, 6))
     im = gdf_sum.plot(
         column=var,

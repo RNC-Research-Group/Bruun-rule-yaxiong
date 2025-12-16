@@ -11,11 +11,11 @@ import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
 
-IDposition_folder = "input\SLR_OCC"
+IDposition_folder = "input/SLR_OCC"
 IDposition_filename = "NZ_VLM_final_May24.csv"
-SLR_folder = "input\SLR_OCC"
-SLR_filename = "NZSeaRise_proj_vlm.csv"
-outputloc = "input\SLR"
+SLR_folder = "input/SLR_OCC"
+SLR_filename = "NZSeaRise_proj_novlm.csv"
+outputloc = "input/SLR"
 
 current_script = os.path.abspath(__file__)
 grandparent_folder = os.path.dirname(os.path.dirname(current_script))
