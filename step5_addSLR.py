@@ -64,10 +64,10 @@ wave_points = gpd.points_from_xy(data.wave_X, data.wave_Y, crs=data.crs).to_crs(
 data["wave_lat"] = wave_points.y
 data["wave_lon"] = wave_points.x
 
-cols_for_map = ['Unique_ID', 'dist_m', 'transect_id', 'mean_dist_to_coast', 'CD', 'B', 'L', 'R', 'tanbeta', 'S_SLR', 'R_SLR', 'ER_SLR', 'lat', 'lon', 'wave_lat', 'wave_lon']
+cols_for_map = ['Unique_ID', 'dist_m', 'mean_dist_to_coast', 'CD', 'B', 'L', 'R', 'tanbeta', 'S_SLR', 'R_SLR', 'ER_SLR', 'lat', 'lon', 'wave_lat', 'wave_lon']
 print(data[cols_for_map])
 data[cols_for_map].to_parquet(
-    os.path.join(grandparent_folder, outputfolderloc, f"brunnrule_{shorelinepointfilename}_b_{buffer_dist}_{confidence_level}_y_{year}_s_{scenario}_p_{percentile}.parquet")
+    os.path.join(f"brunnrule_{shorelinepointfilename}_b_{buffer_dist}_{confidence_level}_y_{year}_s_{scenario}_p_{percentile}.parquet")
 )
 
 # data.to_file(
