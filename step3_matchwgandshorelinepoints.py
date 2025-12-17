@@ -183,7 +183,7 @@ def process_row(i):
 
 results = process_map(process_row, range(len(lastestuniquepoints)), chunksize=10)
 chained_rows = chain.from_iterable(results)
-rows_intersection = pd.concat(chained_rows, ignore_index=True)
+rows_intersection = pd.DataFrame(chained_rows)
 print(rows_intersection)
 
 # convert to GeoDataFrame of lines
