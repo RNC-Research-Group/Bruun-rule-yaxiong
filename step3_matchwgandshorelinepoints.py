@@ -110,19 +110,12 @@ rows_intersection = []
 # Now, using process_map parallel processing
 # 2511/229154 [00:30<20:10, 187.30it/s]
 
+
 def process_row(i):
     dist_row = distances[i]
     idx_row = indices[i]
-    ux1 = (
-        lastestuniquepoints.ux1[i]
-        if "ux1" in lastestuniquepoints.columns
-        else np.nan
-    )
-    uy1 = (
-        lastestuniquepoints.uy1[i]
-        if "uy1" in lastestuniquepoints.columns
-        else np.nan
-    )
+    ux1 = lastestuniquepoints.ux1[i] if "ux1" in lastestuniquepoints.columns else np.nan
+    uy1 = lastestuniquepoints.uy1[i] if "uy1" in lastestuniquepoints.columns else np.nan
     Unique_ID = (
         lastestuniquepoints.Unique_ID[i]
         if "Unique_ID" in lastestuniquepoints.columns
@@ -180,6 +173,7 @@ def process_row(i):
             }
         )
     return rows
+
 
 results = process_map(process_row, range(len(lastestuniquepoints)), chunksize=10)
 chained_rows = chain.from_iterable(results)

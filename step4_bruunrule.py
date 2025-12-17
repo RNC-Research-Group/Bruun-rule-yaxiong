@@ -13,6 +13,7 @@ import rasterio as rio
 import os
 import math
 from tqdm.auto import tqdm
+
 tqdm.pandas()
 from tqdm.contrib.concurrent import process_map
 
@@ -57,8 +58,13 @@ dunepeak_all = gpd.read_file(
 )
 dem_bathy = rio.open(bathy_path)
 
-print(os.path.join(grandparent_folder, inputloctransect, transect_wp_gpkg), transect_wp.crs)
-print(os.path.join(grandparent_folder, inputlocdunepeak, dunepeak_gpkg), dunepeak_all.crs)
+print(
+    os.path.join(grandparent_folder, inputloctransect, transect_wp_gpkg),
+    transect_wp.crs,
+)
+print(
+    os.path.join(grandparent_folder, inputlocdunepeak, dunepeak_gpkg), dunepeak_all.crs
+)
 print(bathy_path, dem_bathy.crs)
 
 n_transect_wp = len(transect_wp)
@@ -73,12 +79,13 @@ num_digits = math.ceil(
     math.log10(n_transect_wp + 1)
 )  # +1 in case n is exactly a power of 10
 
+
 def process_row(tup):
     if type(tup) is tuple:
         _, row = tup
     else:
         row = tup
-    #row = row.to_dict()
+    # row = row.to_dict()
     x0, y0 = row["point_X"], row["point_Y"]
     x1, y1 = row["wave_X"], row["wave_Y"]
 
@@ -199,7 +206,8 @@ def process_row(tup):
         row["y_new"] = np.nan
     return row
 
-#savetransect_wp = pd.concat(process_map(process_row, transect_wp.iterrows(), total=n_transect_wp, chunksize=10), ignore_index=True)
+
+# savetransect_wp = pd.concat(process_map(process_row, transect_wp.iterrows(), total=n_transect_wp, chunksize=10), ignore_index=True)
 savetransect_wp = transect_wp.progress_apply(process_row, axis=1)
 
 savetransect_wp["Unique_ID"] = savetransect_wp["Unique_ID"].apply(

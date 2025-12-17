@@ -67,7 +67,7 @@ for var in tqdm(variables):
 
         if (end >= mindate) and (start <= maxdate):
             filepath = os.path.join(folder, f)
-            #print(f"  Reading {f}")
+            # print(f"  Reading {f}")
             ds = xr.open_dataset(filepath)
 
             seapoint = ds["seapoint"].values
@@ -85,7 +85,7 @@ for var in tqdm(variables):
             # Fill matching data
             var_aligned[:, idx_ref] = var_data[:, idx_cur]
 
-            #print(f"    {len(common)} / {n_points} seapoints matched")
+            # print(f"    {len(common)} / {n_points} seapoints matched")
 
             var_all.append(var_aligned)
             time_all.append(time)

@@ -45,12 +45,12 @@ years_delta = year - currentyear
 
 # Vectorized lookup to avoid per-row filtering
 # Ensure indices are unique before mapping
-site_lookup = (
-    SLR_match.drop_duplicates(subset="Unique_ID").set_index("Unique_ID")["Site ID"]
-)
-scenario_lookup = (
-    SLR_scenario.drop_duplicates(subset="Site ID").set_index("Site ID")[percentile]
-)
+site_lookup = SLR_match.drop_duplicates(subset="Unique_ID").set_index("Unique_ID")[
+    "Site ID"
+]
+scenario_lookup = SLR_scenario.drop_duplicates(subset="Site ID").set_index("Site ID")[
+    percentile
+]
 
 data["Site ID"] = data["Unique_ID"].map(site_lookup)
 data["S_SLR"] = data["Site ID"].map(scenario_lookup)
@@ -64,10 +64,28 @@ wave_points = gpd.points_from_xy(data.wave_X, data.wave_Y, crs=data.crs).to_crs(
 data["wave_lat"] = wave_points.y
 data["wave_lon"] = wave_points.x
 
-cols_for_map = ['Unique_ID', 'dist_m', 'mean_dist_to_coast', 'CD', 'B', 'L', 'R', 'tanbeta', 'S_SLR', 'R_SLR', 'ER_SLR', 'lat', 'lon', 'wave_lat', 'wave_lon']
+cols_for_map = [
+    "Unique_ID",
+    "dist_m",
+    "mean_dist_to_coast",
+    "CD",
+    "B",
+    "L",
+    "R",
+    "tanbeta",
+    "S_SLR",
+    "R_SLR",
+    "ER_SLR",
+    "lat",
+    "lon",
+    "wave_lat",
+    "wave_lon",
+]
 print(data[cols_for_map])
 data[cols_for_map].to_parquet(
-    os.path.join(f"brunnrule_{shorelinepointfilename}_b_{buffer_dist}_{confidence_level}_y_{year}_s_{scenario}_p_{percentile}.parquet")
+    os.path.join(
+        f"brunnrule_{shorelinepointfilename}_b_{buffer_dist}_{confidence_level}_y_{year}_s_{scenario}_p_{percentile}.parquet"
+    )
 )
 
 # data.to_file(

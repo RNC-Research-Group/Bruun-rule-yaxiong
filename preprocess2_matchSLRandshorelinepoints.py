@@ -107,8 +107,9 @@ unique_matched = np.sort(matched["index_right"].unique())
 
 print("plotting...")
 
-lines = gpd.GeoDataFrame({"site": matched.site}, geometry=
-    matched.apply(
+lines = gpd.GeoDataFrame(
+    {"site": matched.site},
+    geometry=matched.apply(
         lambda row: gpd.GeoSeries(
             LineString([(row["point_X"], row["point_Y"]), (row["SLR_X"], row["SLR_Y"])])
         ),
@@ -117,14 +118,12 @@ lines = gpd.GeoDataFrame({"site": matched.site}, geometry=
     crs=matched.crs,
 )
 
-ax = lines.to_crs(epsg=3857).plot("site", figsize=(10,8), linewidth=0.5, cmap="tab20")
-ctx.add_basemap(
-    ax,
-    source=ctx.providers.Esri.WorldImagery
-)
+ax = lines.to_crs(epsg=3857).plot("site", figsize=(10, 8), linewidth=0.5, cmap="tab20")
+ctx.add_basemap(ax, source=ctx.providers.Esri.WorldImagery)
 
 ax.set_title(
-    f"{shorelinepointfilename}_SLR_match total SLR points: {len(unique_matched)}", fontsize=40
+    f"{shorelinepointfilename}_SLR_match total SLR points: {len(unique_matched)}",
+    fontsize=40,
 )
 plt.axis("off")
 matched["Unique_ID"] = matched["Unique_ID"].astype(float).astype(int).astype(str)
