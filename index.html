@@ -1,0 +1,189 @@
+<html>
+
+<head>
+  <title>NZCCD Bruun Rule calculations</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+  crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+  crossorigin=""></script>
+  <script src="https://unpkg.com/leaflet.glify@3.3.0/dist/glify-browser.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/spin.js/2.3.2/spin.min.js"></script>
+  <script src="https://unpkg.com/leaflet-spin@1.1.0/leaflet.spin.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.3.1/jquery.min.js"
+    integrity="sha256-FgpCb/KJQlLNfOu91ta32o/NMZxltwRo8QtmkMRdAu8=" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/leaflet-geosearch@latest/dist/bundle.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-geosearch@latest/assets/css/leaflet.css">
+  <script src="https://unpkg.com/leaflet-providers@1.3.0/leaflet-providers.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chroma-js/2.4.2/chroma.min.js"
+    integrity="sha512-zInFF17qBFVvvvFpIfeBzo7Tj7+rQxLeTJDmbxjBz5/zIr89YVbTNelNhdTT+/DCrxoVzBeUPVFJsczKbB7sew=="
+    crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  
+  <style>
+      body,
+      html,
+      #map {
+          width: 100%;
+          height: 100%;
+          margin: 0;
+          padding: 0;
+      }
+
+      .legend {
+          color: white;
+          padding: 10px;
+          background-color: rgba(0, 0, 0, 0.8);
+          border-radius: 5px;
+          max-width: 500px;
+      }
+
+      .legend i {
+          width: 18px;
+          height: 18px;
+          float: left;
+          margin-right: 8px;
+          opacity: 0.7;
+          clear: left;
+      }
+
+      .legend h4 {
+        margin-top: 0px;
+      }
+
+      .link {
+          text-decoration: underline;
+          cursor: pointer;
+      }
+  </style>
+</head>
+
+<body>
+  <div id="map"></div>
+  <script type="module">
+    var map = L.map('map', {
+      center: [-42, 172],
+      zoom: 6,
+      //worldCopyJump: true
+    })
+
+    var baseMaps = {
+      "OSM": L.tileLayer.provider("OpenStreetMap.Mapnik"),
+      "CartoDB Positron": L.tileLayer.provider('CartoDB.Positron'),
+      "CartoDB Dark Matter": L.tileLayer.provider("CartoDB.DarkMatter"),
+      "ESRI WorldImagery": L.tileLayer.provider("Esri.WorldImagery").addTo(map),
+      "Google Hybrid": L.tileLayer('http://{s}.google.com/vt/lyrs=s,h&x={x}&y={y}&z={z}', {
+        maxZoom: 20,
+        subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
+      })
+    }
+
+    var overlayMaps = {
+    }
+
+    L.control.layers(baseMaps, overlayMaps, { position: "topleft" }).addTo(map);
+
+    var cmap = chroma.scale('YlOrRd').domain([0, 1000])
+
+    map.spin(true);
+
+    
+    const parquet = await import("https://unpkg.com/@dsnp/parquetjs@1.7.0/dist/browser/parquet.esm.js");
+    const buffer_library = await import("https://esm.sh/buffer");
+    const URL = "brunnrule_JaMoNoRaSoWa_b_10_medium_confidence_y_2150_s_4.5_p_0.5.parquet";
+    let resp = await fetch(URL)
+    let buffer = await resp.arrayBuffer()
+    buffer = buffer_library.Buffer.from(buffer);
+    const reader = await parquet.ParquetReader.openBuffer(buffer);
+    //const reader = await parquet.ParquetReader.openUrl(URL);
+    var startTime = performance.now()
+    let cursor = reader.getCursor();
+    let record = null;
+    var results = []
+    while (record = await cursor.next()) {
+      results.push(record)
+    }
+    await reader.close();
+    var endTime = performance.now()
+    console.log(`Took ${(endTime - startTime)/1000}s to read ${results.length} rows from ${URL}`)
+    console.log(results)
+
+    for (var r of results) {
+      r.R = parseFloat(r.R)
+    }
+
+    var points = results.map(r => [parseFloat(r.lat), parseFloat(r.lon)])
+
+    L.glify.points({
+      map: map,
+      data: points,
+      size: 10,
+      fragmentShaderSource: L.glify.shader.fragment.simpleCircle,
+      sensitivity: 5,
+      sensitivityHover: 5,
+      color: function(index, point) {
+        var r = results[index]
+        if (!r.R) {
+          return {r:0, g:0, b:0}
+        }
+        var c = cmap(r.R).gl()
+        return { r: c[0], g: c[1], b: c[2] };
+      },
+      click: function (e, point, xy) {
+        var i = points.indexOf(point);
+        var r = results[i];
+        console.log(r);
+        $("#plot").remove()
+        if (window.popup) map.closePopup(window.popup)
+
+        window.popup = L.popup({minWidth: 800})
+          //['Unique_ID', 'dist_m', 'mean_dist_to_coast', 'CD', 'B', 'L', 'R', 'tanbeta', 'S_SLR', 'R_SLR', 'ER_SLR', 'lat', 'lon', 'wave_lat', 'wave_lon']
+          .setContent(`Unique ID: ${r.Unique_ID}<br>
+            Distance to WHACS point: ${parseInt(r.dist_m).toLocaleString()}m<br>
+            Distance to Mean High Water Line: ${parseFloat(r.mean_dist_to_coast).toLocaleString()}m<br>
+            Closure Depth (h): ${parseFloat(r.CD).toLocaleString()}m<br>
+            Dune height (B): ${parseFloat(r.B).toLocaleString()}m<br>
+            Distance from the dune peak to the depth of closure (L): ${parseFloat(r.L).toLocaleString()}m<br>
+            Shoreline recession (R): ${parseFloat(r.R).toLocaleString()}m<br>
+            tanβ (slope): ${parseFloat(r.tanbeta).toLocaleString()}<br>
+            Sea-level rise rate (S_SLR): ${parseFloat(r.S_SLR).toFixed(2)} m/yr<br>
+            Bruun Rule predicted shoreline retreat (R_SLR): ${parseFloat(r.R_SLR).toLocaleString()} m<br>
+            Bruun Rule predicted shoreline retreat per year (ER_SLR): ${parseFloat(r.ER_SLR).toLocaleString()} m/yr<br>
+            WHACS point latitude: ${parseFloat(r.wave_lat)}<br>
+            WHACS point longitude: ${parseFloat(r.wave_lon)}<br>
+          `)
+          .setLatLng(point)
+          .addTo(map);
+      },
+    });
+    map.spin(false);
+
+    var geoSearch = new GeoSearch.GeoSearchControl({
+      provider: new GeoSearch.OpenStreetMapProvider(),
+      style: 'button',
+      autoComplete: true,
+      autoCompleteDelay: 250,
+      autoClose: true,
+      position: "topleft"
+    }).addTo(map);
+
+    var legend = L.control({ position: 'bottomright' });
+
+    legend.onAdd = function (map) {
+      var div = L.DomUtil.create('div', 'info legend');
+      div.innerHTML += "<h4>Bruun retreat (m)</h4>"
+      for (var i = 0; i <= 1000; i += 200) {
+        div.innerHTML += `<i style="background:${cmap(i).css()}"></i>${i}<br>`
+      }
+      div.innerHTML += `<i style="background:black"></i>Uncertain<br>`
+      return div;
+    };
+
+    legend.addTo(map);
+  </script>
+</body>
+
+</html>
