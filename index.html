@@ -22,6 +22,7 @@
     integrity="sha512-zInFF17qBFVvvvFpIfeBzo7Tj7+rQxLeTJDmbxjBz5/zIr89YVbTNelNhdTT+/DCrxoVzBeUPVFJsczKbB7sew=="
     crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js" integrity="sha512-dfX5uYVXzyU8+KHqj8bjo7UkOdg18PaOtpa48djpNbZHwExddghZ+ZmzWT06R5v6NSk3ZUfsH6FNEDepLx9hPQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   
   <style>
       body,
@@ -90,76 +91,102 @@
 
     map.spin(true);
 
-    
-    const parquet = await import("https://unpkg.com/@dsnp/parquetjs@1.7.0/dist/browser/parquet.esm.js");
-    const buffer_library = await import("https://esm.sh/buffer");
-    const URL = "brunnrule_JaMoNoRaSoWa_b_10_medium_confidence_y_2150_s_4.5_p_0.5.parquet";
-    let resp = await fetch(URL)
-    let buffer = await resp.arrayBuffer()
-    buffer = buffer_library.Buffer.from(buffer);
-    const reader = await parquet.ParquetReader.openBuffer(buffer);
-    //const reader = await parquet.ParquetReader.openUrl(URL);
-    var startTime = performance.now()
-    let cursor = reader.getCursor();
-    let record = null;
-    var results = []
-    while (record = await cursor.next()) {
-      results.push(record)
-    }
-    await reader.close();
-    var endTime = performance.now()
-    console.log(`Took ${(endTime - startTime)/1000}s to read ${results.length} rows from ${URL}`)
-    console.log(results)
-
-    for (var r of results) {
-      r.R = parseFloat(r.R)
+    // Helper function to parse CSV with Promise
+    function parseCSV(url) {
+      return new Promise((resolve, reject) => {
+        Papa.parse(url, {
+          header: true,
+          download: true,
+          dynamicTyping: true,
+          skipEmptyLines: true,
+          complete: function(results) {
+            console.log(`Loaded ${url}:`, results.data.length, 'rows');
+            resolve(results.data);
+          },
+          error: function(error) {
+            console.error(`Error loading ${url}:`, error);
+            reject(error);
+          }
+        });
+      });
     }
 
-    var points = results.map(r => [parseFloat(r.lat), parseFloat(r.lon)])
+    // Load both CSV files simultaneously and initialize map
+    async function loadDataAndInitializeMap() {
+      try {
+        const [bruunruleData, nzSeaRiseData] = await Promise.all([
+          parseCSV('bruunrule_JaMoNoRaSoWa_b_10.csv'),
+          parseCSV('NZSeaRise_proj_novlm.csv')
+        ]);
 
-    L.glify.points({
-      map: map,
-      data: points,
-      size: 10,
-      fragmentShaderSource: L.glify.shader.fragment.simpleCircle,
-      sensitivity: 5,
-      sensitivityHover: 5,
-      color: function(index, point) {
-        var r = results[index]
-        if (!r.R) {
-          return {r:0, g:0, b:0}
-        }
-        var c = cmap(r.R).gl()
-        return { r: c[0], g: c[1], b: c[2] };
-      },
-      click: function (e, point, xy) {
-        var i = points.indexOf(point);
-        var r = results[i];
-        console.log(r);
-        $("#plot").remove()
-        if (window.popup) map.closePopup(window.popup)
+        window.bruunruleData = bruunruleData
+        window.nzSeaRiseData = nzSeaRiseData
+        console.log({bruunruleData, nzSeaRiseData})
 
-        window.popup = L.popup({minWidth: 800})
-          //['Unique_ID', 'dist_m', 'mean_dist_to_coast', 'CD', 'B', 'L', 'R', 'tanbeta', 'S_SLR', 'R_SLR', 'ER_SLR', 'lat', 'lon', 'wave_lat', 'wave_lon']
-          .setContent(`Unique ID: ${r.Unique_ID}<br>
-            Distance to WHACS point: ${parseInt(r.dist_m).toLocaleString()}m<br>
-            Distance to Mean High Water Line: ${parseFloat(r.mean_dist_to_coast).toLocaleString()}m<br>
-            Closure Depth (h): ${parseFloat(r.CD).toLocaleString()}m<br>
-            Dune height (B): ${parseFloat(r.B).toLocaleString()}m<br>
-            Distance from the dune peak to the depth of closure (L): ${parseFloat(r.L).toLocaleString()}m<br>
-            Shoreline recession (R): ${parseFloat(r.R).toLocaleString()}m<br>
-            tanβ (slope): ${parseFloat(r.tanbeta).toLocaleString()}<br>
-            Sea-level rise rate (S_SLR): ${parseFloat(r.S_SLR).toFixed(2)} m/yr<br>
-            Bruun Rule predicted shoreline retreat (R_SLR): ${parseFloat(r.R_SLR).toLocaleString()} m<br>
-            Bruun Rule predicted shoreline retreat per year (ER_SLR): ${parseFloat(r.ER_SLR).toLocaleString()} m/yr<br>
-            WHACS point latitude: ${parseFloat(r.wave_lat)}<br>
-            WHACS point longitude: ${parseFloat(r.wave_lon)}<br>
-          `)
-          .setLatLng(point)
-          .addTo(map);
-      },
-    });
-    map.spin(false);
+        var points = bruunruleData.map(r => [parseFloat(r.lat), parseFloat(r.lon)])
+
+        L.glify.points({
+          map: map,
+          data: points,
+          size: 10,
+          fragmentShaderSource: L.glify.shader.fragment.simpleCircle,
+          sensitivity: 5,
+          sensitivityHover: 5,
+          color: function(index, point) {
+            var r = bruunruleData[index]
+            if (!r.R) {
+              return {r:0, g:0, b:0}
+            }
+            var c = cmap(r.R).gl()
+            return { r: c[0], g: c[1], b: c[2] };
+          },
+          click: function (e, point, xy) {
+            if (!point) return;
+            var i = points.indexOf(point);
+            var r = bruunruleData[i];
+            console.log(r);
+            $("#plot").remove()
+            if (window.popup) map.closePopup(window.popup)
+
+            var confidence_level = "medium_confidence"
+            var year = 2150
+            var percentile = 0.5
+            var scenario = 4.5
+            var SLR_ID = r["Site ID"]
+            var SLR = nzSeaRiseData.find(d => d.site == SLR_ID && d.Confidence == confidence_level && d.year == year && d.scenario == scenario)
+            console.log(SLR)
+            var R_SLR = SLR[0.5] * r.R
+            var ER_SLR = R_SLR / (year - 2020)
+
+            window.popup = L.popup({minWidth: 800})
+              //['Unique_ID', 'dist_m', 'mean_dist_to_coast', 'CD', 'B', 'L', 'R', 'tanbeta', 'S_SLR', 'R_SLR', 'ER_SLR', 'lat', 'lon', 'wave_lat', 'wave_lon']
+              .setContent(`Unique ID: ${r.Unique_ID}<br>
+                Distance to WHACS point: ${r.dist_m.toLocaleString()}m<br>
+                Distance to Mean High Water Line: ${r.mean_dist_to_coast.toLocaleString()}m<br>
+                Closure Depth (h): ${r.CD.toLocaleString()}m<br>
+                Dune height (B): ${r.B.toLocaleString()}m<br>
+                Distance from the dune peak to the depth of closure (L): ${r.L.toLocaleString()}m<br>
+                Shoreline recession (R): ${r.R.toLocaleString()}m<br>
+                tanβ (slope): ${r.tanbeta.toLocaleString()}<br>
+                Projected Sea Level Rise at ${year} (S_SLR): p50:${SLR[0.5].toFixed(2)} m (p17:${SLR[0.17]}m - p83:${SLR[0.83]}m)<br>
+                Bruun Rule predicted shoreline retreat at ${year} (R_SLR): p50:${(r.R * SLR[0.5]).toLocaleString()} (p17:${(r.R * SLR[0.17]).toLocaleString()}m - p83:${(r.R * SLR[0.83]).toLocaleString()}m)<br>
+                Bruun Rule predicted shoreline retreat per year (ER_SLR): ${(r.R * SLR[0.5] / (year - 2020)).toLocaleString()} m/yr (p17:${(r.R * SLR[0.17] / (year - 2020)).toLocaleString()}m/yr - p83:${(r.R * SLR[0.83] / (year - 2020)).toLocaleString()}m/yr)<br>
+                WHACS point latitude: ${r.wave_lat}<br>
+                WHACS point longitude: ${r.wave_lon}<br>
+              `)
+              .setLatLng(point)
+              .addTo(map);
+          },
+        });
+        map.spin(false);
+      } catch (error) {
+        console.error('Failed to load data:', error);
+        map.spin(false);
+      }
+    }
+
+    // Start loading data
+    loadDataAndInitializeMap();
 
     var geoSearch = new GeoSearch.GeoSearchControl({
       provider: new GeoSearch.OpenStreetMapProvider(),
