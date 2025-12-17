@@ -6,27 +6,24 @@ Created on Sun Oct 26 10:51:48 2025
 @author: yshe948
 """
 
-from tqdm import tqdm
 import pandas as pd
 import geopandas as gpd
 import numpy as np
 import rasterio as rio
-from rasterio.plot import show
-import matplotlib.pyplot as plt
 import os
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 import math
-import warnings
+from tqdm.auto import tqdm
+tqdm.pandas()
+from tqdm.contrib.concurrent import process_map
 
 # input
 shorelinepointfilename = "JaMoNoRaSoWa"  # JaMoNoRaSoWa
 inputloctransect = r"output/match"
 transect_wp_gpkg = f"transect_wp_{shorelinepointfilename}.gpkg"
 inputlocdunepeak = r"output/dunepeak"
-buffer_dist = 10
-isexportplot = 0  # 0 do not export the transect; 1 export transect
+buffer_dist = 5
 dunepeak_gpkg = f"{shorelinepointfilename}_dunepeak_{buffer_dist}.gpkg"
-bathyfolderloc = r"Z:\Bathymetry250m"
+bathyfolderloc = r"input/Bathymetry250m"
 bathyname = r"nzbathy_2016.tif"
 
 
@@ -49,7 +46,7 @@ grandparent_folder = os.path.dirname(os.path.dirname(current_script))
 os.makedirs(os.path.join(grandparent_folder, outputfigurefolder), exist_ok=True)
 os.makedirs(os.path.join(grandparent_folder, outputfolder), exist_ok=True)
 
-bathy_path = os.path.join(bathyfolderloc, bathyname)
+bathy_path = os.path.join(grandparent_folder, bathyfolderloc, bathyname)
 
 # load data
 transect_wp = gpd.read_file(
@@ -60,10 +57,9 @@ dunepeak_all = gpd.read_file(
 )
 dem_bathy = rio.open(bathy_path)
 
-print(transect_wp.crs)
-print(dunepeak_all.crs)
-print(dem_bathy.crs)
-
+print(os.path.join(grandparent_folder, inputloctransect, transect_wp_gpkg), transect_wp.crs)
+print(os.path.join(grandparent_folder, inputlocdunepeak, dunepeak_gpkg), dunepeak_all.crs)
+print(bathy_path, dem_bathy.crs)
 
 n_transect_wp = len(transect_wp)
 num_digits = math.ceil(
@@ -76,15 +72,13 @@ num_digits = math.ceil(
 num_digits = math.ceil(
     math.log10(n_transect_wp + 1)
 )  # +1 in case n is exactly a power of 10
-k = 1
-savetransect_wp = gpd.GeoDataFrame(
-    columns=transect_wp.columns, geometry="geometry", crs=transect_wp.crs
-)
 
-for _, row in tqdm(
-    transect_wp.iterrows(), total=n_transect_wp, desc="processing transects"
-):
-
+def process_row(tup):
+    if type(tup) is tuple:
+        _, row = tup
+    else:
+        row = tup
+    #row = row.to_dict()
     x0, y0 = row["point_X"], row["point_Y"]
     x1, y1 = row["wave_X"], row["wave_Y"]
 
@@ -153,20 +147,16 @@ for _, row in tqdm(
 
     if pd.notna(coast_elev) and coast_elev < maxdunepeak:
         dunepeak = coast_elev
-        choosefrom = "coast"
         row["choosefrom"] = "coast"
     elif bathy_elev < maxdunepeak:
         dunepeak = bathy_elev
-        choosefrom = "bathy"
         row["choosefrom"] = "bathy"
     else:
         dunepeak = maxdunepeak
-        choosefrom = "max"
         row["choosefrom"] = "max"
 
     if dunepeak < 0:
         dunepeak = 0
-        choosefrom = "0"
         row["choosefrom"] = "0"
 
     # # find the SLR
@@ -177,10 +167,6 @@ for _, row in tqdm(
     row["B"] = dunepeak
     # row["S"]=match_SLR_senario[f"{percentile}"].iloc[0] # sea level rise
     row["S"] = 1
-    # sys.exit()
-    wavepointdem = dem_bathy_profile[
-        np.argmin(np.abs(distances_bathy_clipped - length))
-    ]
 
     if intersection_distances:
         intersection_median = np.median(intersection_distances)
@@ -203,7 +189,6 @@ for _, row in tqdm(
         row["y_new"] = y_new
     else:
         intersection_median = None
-        print(f"No intersection found along transect segment k = {k}")
         row["L"] = np.nan
         row["R"] = np.nan
         row["tanbeta"] = np.nan
@@ -212,220 +197,15 @@ for _, row in tqdm(
         # row["ER"]=np.nan
         row["x_new"] = np.nan
         row["y_new"] = np.nan
+    return row
 
-    if isexportplot == 1:
-        fig3, ax3 = plt.subplots(figsize=(12, 4))
-
-        ax3.scatter(
-            distances_bathy_clipped,
-            dem_bathy_profile,
-            color="none",
-            s=30,
-            alpha=1,
-            edgecolors="blue",
-            marker="o",
-            label="bathy",
-        )
-
-        ax3.scatter(
-            0,
-            dunepeak,
-            color="green",
-            s=30,
-            alpha=1,
-            edgecolors="green",
-            marker="^",
-            label="dune peak",
-        )
-
-        ax3.text(
-            0,
-            dunepeak,  # data coordinates
-            f"dune peak (0, {dunepeak:.1f}) from {choosefrom}",  # text string
-            color="black",
-            fontsize=10,
-            fontweight="bold",
-            ha="left",
-            va="bottom",  # text alignment
-            rotation=0,  # rotation in degrees
-        )
-
-        ax3.scatter(
-            length,
-            wavepointdem,
-            color="green",
-            s=30,
-            alpha=1,
-            edgecolors="green",
-            marker="s",
-            label="wave point",
-        )
-
-        ax3.text(
-            length,
-            wavepointdem,  # data coordinates
-            f"wave ({length:.0f}, {wavepointdem:.1f})",  # text string
-            color="black",
-            fontsize=10,
-            fontweight="bold",
-            ha="left",
-            va="bottom",  # text alignment
-            rotation=0,  # rotation in degrees
-        )
-
-        ax3.plot(
-            [distances_bathy_clipped[0], distances_bathy_clipped[-1]],
-            [0, 0],
-            color="k",
-            linestyle="--",
-            label="water surface",
-        )
-
-        if intersection_distances:
-            ax3.scatter(
-                intersection_distances,
-                np.ones(len(intersection_distances)) * target_z,
-                color="purple",
-                s=30,
-                alpha=1,
-                edgecolors="purple",
-                marker="o",
-                label="closure depth all",
-            )
-            ax3.scatter(
-                intersection_median,
-                target_z,
-                color="pink",
-                s=30,
-                alpha=1,
-                edgecolors="pink",
-                marker="o",
-                label="closure depth median",
-            )
-
-            ax3.text(
-                intersection_median,
-                target_z,  # data coordinates
-                f"CD ({intersection_median:.0f}, {target_z:.1f})",  # text string
-                color="black",
-                fontsize=10,
-                fontweight="bold",
-                ha="left",
-                va="bottom",  # text alignment
-                rotation=0,  # rotation in degrees
-            )
-            ax3.set_title(
-                f"Idx: {k-1:.0f} ({row.point_X:.0f}, {row.point_Y:.0f}); "
-                f"Idx_w: {row.index_right:.0f}; "
-                f"R = {row.R:.2f} m, when S = {row.S:.1f} m"
-            )
-        else:
-            ax3.set_title(
-                f"({row.point_X:.0f}, {row.point_Y:.0f}) Closure depth could not be determined."
-            )
-
-        ax3.legend([f"bathy ({dx_bathy:.0f} m)"], loc="lower left")
-        ax3.set_xlabel("distance (m)")
-        ax3.set_ylabel("z (m)")
-        # plt.show()
-
-        axins = inset_axes(
-            ax3,
-            width="100%",
-            height="100%",
-            bbox_to_anchor=(
-                0.45,
-                0.22,
-                0.8,
-                0.8,
-            ),  # (x0, y0, width, height) in relative figure coords
-            bbox_transform=ax3.transAxes,  # interpret coordinates relative to parent axis
-            loc="upper right",  # anchor point of the inset box
-        )
-
-        # Get bounding box between the two points, with a small buffer if needed
-        xmin_crop, xmax_crop = sorted([row["point_X"], row["wave_X"]])
-        ymin_crop, ymax_crop = sorted([row["point_Y"], row["wave_Y"]])
-
-        # Add a small margin (optional)
-
-        xmin_crop -= buffer_plotbathydem
-        xmax_crop += buffer_plotbathydem
-        ymin_crop -= buffer_plotbathydem
-        ymax_crop += buffer_plotbathydem
-
-        # Crop DEM to bounding box
-        window = rio.windows.from_bounds(
-            xmin_crop, ymin_crop, xmax_crop, ymax_crop, transform=dem_bathy.transform
-        )
-        dem_cropped = dem_bathy.read(1, window=window)
-
-        # Update transform for the cropped window
-        transform_cropped = dem_bathy.window_transform(window)
-
-        # Show DEM in the inset
-        show(
-            dem_cropped, transform=transform_cropped, ax=axins, cmap="Greys_r", zorder=0
-        )
-        # show(dem_bathy, ax=axins, cmap='Greys_r',zorder=0)
-        axins.plot(
-            [row["point_X"], row["wave_X"]],
-            [row["point_Y"], row["wave_Y"]],
-            color="yellow",
-            linewidth=2,
-            alpha=1,
-            zorder=2,
-        )
-        axins.scatter(
-            row["point_X"],
-            row["point_Y"],
-            color="red",
-            s=30,
-            alpha=1,
-            edgecolors="red",
-            marker="o",
-            label="point",
-            zorder=3,
-        )
-        axins.scatter(
-            row["wave_X"],
-            row["wave_Y"],
-            color="green",
-            s=30,
-            alpha=1,
-            edgecolors="green",
-            marker="s",
-            label="wave point",
-            zorder=3,
-        )
-
-        plt.axis("off")
-        fig3.savefig(
-            os.path.join(
-                grandparent_folder, outputfigurefolder, f"plot_{k:0{num_digits}d}.png"
-            ),
-            dpi=100,
-            bbox_inches="tight",
-        )
-        # sys.exit()
-        plt.close(fig3)
-
-    k = k + 1
-
-    # do not show warning here
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=FutureWarning)
-        # savedata
-        savetransect_wp = pd.concat(
-            [savetransect_wp, gpd.GeoDataFrame([row], crs=transect_wp.crs)],
-            ignore_index=True,
-        )
+#savetransect_wp = pd.concat(process_map(process_row, transect_wp.iterrows(), total=n_transect_wp, chunksize=10), ignore_index=True)
+savetransect_wp = transect_wp.progress_apply(process_row, axis=1)
 
 savetransect_wp["Unique_ID"] = savetransect_wp["Unique_ID"].apply(
     lambda x: str(int(x)) if pd.notna(x) else ""
 )
 savetransect_wp.set_crs(dem_bathy.crs, inplace=True)
-
 
 savetransect_wp.to_file(
     os.path.join(grandparent_folder, outputfolder, outputfilename_gpkg), driver="GPKG"
