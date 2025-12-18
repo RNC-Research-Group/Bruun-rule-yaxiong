@@ -23,6 +23,10 @@
     crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js" integrity="sha512-dfX5uYVXzyU8+KHqj8bjo7UkOdg18PaOtpa48djpNbZHwExddghZ+ZmzWT06R5v6NSk3ZUfsH6FNEDepLx9hPQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.3/dist/leaflet.draw.css" />
+  <script src="https://unpkg.com/leaflet-draw@1.0.3/dist/leaflet.draw.js"></script>
+  <link rel="stylesheet" href="https://prominentedge.com/leaflet-measure-path/leaflet-measure-path.css" />
+  <script src="https://prominentedge.com/leaflet-measure-path/leaflet-measure-path.js"></script>
   
   <style>
       body,
@@ -82,7 +86,69 @@
       })
     }
 
+
+    var editableLayers = new L.FeatureGroup();
+    map.addLayer(editableLayers);
+
+    var options = {
+        position: 'topleft',
+        draw: {
+            polyline: {
+                shapeOptions: {
+                    color: '#f357a1',
+                }
+            },
+            polygon: {
+                allowIntersection: true, // Restricts shapes to simple polygons
+                shapeOptions: {
+                    color: '#bada55'
+                },
+                showArea: true,
+                showLength: true,
+            },
+            rectangle: {
+                showArea: true,
+                metric: ["km"],
+            },
+        },
+        edit: {
+            featureGroup: editableLayers, //REQUIRED!!
+            remove: true
+        }
+    };
+
+    var drawControl = new L.Control.Draw(options);
+    map.addControl(drawControl);
+
+    map.on(L.Draw.Event.CREATED, function (e) {
+        console.log("created", e)
+        var type = e.layerType,
+            layer = e.layer;
+        layer.type = type;
+
+        if (type === 'marker') {
+            layer.bindPopup('A popup!');
+        }
+
+        layer.addTo(editableLayers)
+        if (type == "polyline") layer.showMeasurements()
+    });
+    map.on(L.Draw.Event.EDITSTART, function () {
+        console.log("editstart");
+        var drawBounds = editableLayers.getBounds();
+        if (!map.getBounds().contains(drawBounds)) {
+            map.flyToBounds(drawBounds);
+        }
+    });
+    map.on(L.Draw.Event.EDITED, function (e) {
+        console.log("edited", e)
+        e.layers.eachLayer(function (layer) {
+            if (layer.type == "polyline") layer.updateMeasurements()
+        })
+    });
+
     var overlayMaps = {
+      "Drawn Items": editableLayers
     }
 
     L.control.layers(baseMaps, overlayMaps, { position: "topleft" }).addTo(map);
