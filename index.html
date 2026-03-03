@@ -181,7 +181,7 @@
     async function loadDataAndInitializeMap() {
       try {
         const [bruunruleData, nzSeaRiseData] = await Promise.all([
-          parseCSV('bruunrule_JaMoNoRaSoWa_b_10.csv'),
+          parseCSV('bruunrule_JaMoNoRaSoWa_b_10_with_rates.csv'),
           parseCSV('NZSeaRise_proj_novlm.csv')
         ]);
 
@@ -217,7 +217,7 @@
             var confidence_level = "medium_confidence"
             var year = 2150
             var percentile = 0.5
-            var scenario = 4.5
+            var scenario = 7
             var SLR_ID = r["Site ID"]
             var SLR = nzSeaRiseData.find(d => d.site == SLR_ID && d.Confidence == confidence_level && d.year == year && d.scenario == scenario)
             console.log(SLR)
@@ -225,9 +225,9 @@
             var ER_SLR = R_SLR / (year - 2020)
 
             window.popup = L.popup({minWidth: 800})
-              //['Unique_ID', 'dist_m', 'mean_dist_to_coast', 'CD', 'B', 'L', 'R', 'tanbeta', 'S_SLR', 'R_SLR', 'ER_SLR', 'lat', 'lon', 'wave_lat', 'wave_lon']
               .setContent(`Unique ID: ${r.Unique_ID}<br>
-                Distance to WHACS point: ${r.dist_m.toLocaleString()}m<br>
+              Scenario: ${scenario}<br>  
+              Distance to WHACS point: ${r.dist_m.toLocaleString()}m<br>
                 Distance to Mean High Water Line: ${r.mean_dist_to_coast.toLocaleString()}m<br>
                 Closure Depth (h): ${r.CD.toLocaleString()}m<br>
                 Dune height (B): ${r.B.toLocaleString()}m<br>
@@ -235,10 +235,24 @@
                 Shoreline recession (R): ${r.R.toLocaleString()}m<br>
                 tanβ (slope): ${r.tanbeta.toLocaleString()}<br>
                 Projected Sea Level Rise at ${year} (S_SLR): p50:${SLR[0.5].toFixed(2)} m (p17:${SLR[0.17]}m - p83:${SLR[0.83]}m)<br>
-                Bruun Rule predicted shoreline retreat at ${year} (R_SLR): p50:${(r.R * SLR[0.5]).toLocaleString()} (p17:${(r.R * SLR[0.17]).toLocaleString()}m - p83:${(r.R * SLR[0.83]).toLocaleString()}m)<br>
+                Bruun Rule predicted shoreline retreat at ${year} (R_SLR): p50: ${(r.R * SLR[0.5]).toLocaleString()} (p17: ${(r.R * SLR[0.17]).toLocaleString()}m - p83: ${(r.R * SLR[0.83]).toLocaleString()}m)<br>
                 Bruun Rule predicted shoreline retreat per year (ER_SLR): ${(r.R * SLR[0.5] / (year - 2020)).toLocaleString()} m/yr (p17:${(r.R * SLR[0.17] / (year - 2020)).toLocaleString()}m/yr - p83:${(r.R * SLR[0.83] / (year - 2020)).toLocaleString()}m/yr)<br>
                 WHACS point latitude: ${r.wave_lat}<br>
                 WHACS point longitude: ${r.wave_lon}<br>
+                NZCCD Results:<br>
+                Region: ${r.Region}<br>
+                Net shoreline movement: ${r.NSM}m<br>
+                Shoreline change envelope: ${r.SCE}m<br>
+                End point rate: ${r.EPR}m ± ${r.EPRunc}m<br>
+                Rate of change: ${r.LRR} m/yr ± ${r.LCI} m/yr<br>
+                R² score: ${r.LR2}<br>
+                Standard error: ${r.LSE}<br>
+                Weighted rate of change: ${r.WLR} m/yr ± ${r.WCI} m/yr<br>
+                Weighted R² score: ${r.WR2}<br>
+                Weighted standard error: ${r.WSE}<br>
+                Shoreline count: ${r.ShrCount}<br>
+                Total Cumulative Distance (TCD): ${r.TCD.toLocaleString()} m<br>
+                Data duration: ${r.Duration} years (${r.Start_date} - ${r.End_date})<br>
               `)
               .setLatLng(point)
               .addTo(map);
