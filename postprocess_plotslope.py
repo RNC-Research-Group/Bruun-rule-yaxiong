@@ -10,15 +10,14 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 
-shorelinepointfilename = "JaMoNoRaSoWa"
-inputfolderloc = r"output/brunnrule"
-outputfolderloc = r"output/brunnrule"
-buffer_dist = 10
+inputfolderloc = r"output/bruunrule"
+outputfolderloc = r"output/bruunrule"
+buffer_dist = 5
 
-inputfilename = f"brunnrule_{shorelinepointfilename}_buffer_{buffer_dist}.gpkg"
+inputfilename = f"bruunrule_buffer_{buffer_dist}.gpkg"
 inputcoastlinefolder = "input/coastline"
 inputcoastlinefile = "nz-coastline-mean-high-water.shp"
-outputfig1 = f"tanb_{shorelinepointfilename}_buffer_{buffer_dist}.png"
+outputfig1 = f"tanb_buffer_{buffer_dist}.png"
 
 # current folder
 current_script = os.path.abspath(__file__)
@@ -60,7 +59,7 @@ cbar.set_label(r"$\tan(\beta)$", fontsize=fz)
 
 # Title and labels
 ax1.set_title(
-    f"{shorelinepointfilename}_buffer_{buffer_dist}: \n mean: {tanbeta_mean:.2f}; std: {tanbeta_std:.2f}"
+    f"buffer_{buffer_dist}: \n mean: {tanbeta_mean:.2f}; std: {tanbeta_std:.2f}"
 )
 ax1.set_xlabel("x (m)")
 ax1.set_ylabel("y (m)")

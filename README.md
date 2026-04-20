@@ -3,7 +3,7 @@
 preprocess:
 1. preprocess1_getlatestshorelinepoints.py
 get the latest shoreline points in NZCCD dataset from .shp file
-Merged Intersects_UniqueID folder is for all data; output shoreline point filename will be JaMoNoRaSoWa. 
+Merged Intersects_UniqueID folder is for all data; output shoreline point filename will be . 
 Merged Intersects_UniqueID_test folder is for shoreline points from Waiheke island as an example to test; output shoreline point filename will be Wa
 
 2. preprocess1_wavedatadownloadfromwebserver.py

@@ -63,6 +63,25 @@
           text-decoration: underline;
           cursor: pointer;
       }
+
+        .scenario-control {
+          background-color: rgba(0, 0, 0, 0.8);
+          color: white;
+          padding: 10px;
+          border-radius: 5px;
+          min-width: 180px;
+        }
+
+        .scenario-control label {
+          display: block;
+          margin-bottom: 6px;
+          font-weight: bold;
+        }
+
+        .scenario-control select {
+          width: 100%;
+          padding: 4px;
+        }
   </style>
 </head>
 
@@ -151,11 +170,77 @@
       "Drawn Items": editableLayers
     }
 
-    L.control.layers(baseMaps, overlayMaps, { position: "topleft" }).addTo(map);
+    var layerControl = L.control.layers(baseMaps, overlayMaps, { position: "topleft" }).addTo(map);
 
-    var cmap = chroma.scale('YlOrRd').domain([0, 1000])
+    var legendDiv = null
 
     map.spin(true);
+
+    var SCENARIOS = ['1.9', '2.6', '4.5', '7.0', '8.5']
+    var SCENARIO_COLORS = {
+      '1.9': '#1b7837',
+      '2.6': '#4dac26',
+      '4.5': '#f4a736',
+      '7.0': '#e08214',
+      '8.5': '#b2182b'
+    }
+    var activeScenarios = new Set(['2.6'])
+    var activeYear = '2100'
+    var joinThresholdM = 10
+    var scenarioLayers = {}
+    SCENARIOS.forEach(function(s) {
+      scenarioLayers[s] = {
+        line: L.layerGroup().addTo(map),
+        uncertainty: L.layerGroup().addTo(map)
+      }
+      layerControl.addOverlay(scenarioLayers[s].line, 'Scenario ' + s + ' shoreline (p0.5)')
+      layerControl.addOverlay(scenarioLayers[s].uncertainty, 'Scenario ' + s + ' uncertainty (p0.17/p0.83)')
+    })
+    var csvCache = {}
+
+    function buildCsvPath(year, scenario, percentile) {
+      return `../output/bruunrule/NZ_medium_confidence_y${year}_s${scenario}_p${percentile}.csv`
+    }
+
+    var scenarioControl = L.control({ position: 'topright' });
+    scenarioControl.onAdd = function () {
+      var div = L.DomUtil.create('div', 'scenario-control');
+      var checkboxesHtml = SCENARIOS.map(s => `
+        <label style="display:flex;align-items:center;gap:6px;margin-bottom:4px;font-weight:normal;">
+          <input type="checkbox" class="scenario-cb" value="${s}" ${s === '2.6' ? 'checked' : ''}>
+          <span style="display:inline-block;width:14px;height:3px;background:${SCENARIO_COLORS[s]};border-radius:2px;"></span>
+          SSP${s}
+        </label>`).join('');
+      div.innerHTML = `
+        <label for="year-select">Year</label>
+        <select id="year-select">
+          <option value="2050">2050</option>
+          <option value="2100" selected>2100</option>
+          <option value="2150">2150</option>
+        </select>
+        <label style="margin-top:10px;display:block;">Scenarios</label>
+        ${checkboxesHtml}
+      `;
+      L.DomEvent.disableClickPropagation(div);
+      L.DomEvent.on(div.querySelector('#year-select'), 'change', function (e) {
+        activeYear = e.target.value;
+        renderAllActiveScenarios().catch(function(err) { console.error('render error:', err); });
+      });
+      div.querySelectorAll('.scenario-cb').forEach(function(cb) {
+        L.DomEvent.on(cb, 'change', function () {
+          if (cb.checked) {
+            activeScenarios.add(cb.value);
+            renderScenario(activeYear, cb.value).catch(function(err) { console.error('render error:', err); });
+          } else {
+            activeScenarios.delete(cb.value);
+            clearScenario(cb.value);
+          }
+          refreshLegend();
+        });
+      });
+      return div;
+    };
+    scenarioControl.addTo(map);
 
     // Helper function to parse CSV with Promise
     function parseCSV(url) {
@@ -177,87 +262,318 @@
       });
     }
 
-    // Load both CSV files simultaneously and initialize map
+    function refreshLegend() {
+      if (!legendDiv) return;
+      legendDiv.innerHTML = '<h4>Scenarios (' + activeYear + ')</h4>';
+      SCENARIOS.forEach(function(s) {
+        var active = activeScenarios.has(s);
+        legendDiv.innerHTML += `<div style="opacity:${active ? 1 : 0.35};display:flex;align-items:center;gap:6px;margin-bottom:3px;">`
+          + `<i style="background:${SCENARIO_COLORS[s]};height:3px;width:18px;display:inline-block;border-radius:2px;"></i>`
+          + `SSP${s}</div>`;
+      });
+      legendDiv.innerHTML += '<div style="margin-top:8px;"><span style="display:inline-block;width:16px;border-top:2px dashed #5DADE2;vertical-align:middle;margin-right:6px;"></span>Uncertainty (p0.17/p0.83)</div>';
+    }
+
+    function quantile(sortedValues, q) {
+      if (!sortedValues.length) return 0;
+      var pos = (sortedValues.length - 1) * q;
+      var base = Math.floor(pos);
+      var rest = pos - base;
+      if ((sortedValues[base + 1] !== undefined)) {
+        return sortedValues[base] + rest * (sortedValues[base + 1] - sortedValues[base]);
+      }
+      return sortedValues[base];
+    }
+
+
+
+    async function loadDataset(year, scenario, percentile) {
+      var key = `${year}|${scenario}|${percentile}`
+      if (csvCache[key]) return csvCache[key]
+      var path = buildCsvPath(year, scenario, percentile)
+      var rows = await parseCSV(path)
+      csvCache[key] = rows
+      return rows
+    }
+
+    function rowId(row) {
+      return String(row.Unique_ID)
+    }
+
+    function buildProjectedRuns(rows, rateField) {
+      var validRows = rows.filter(r =>
+        Number.isFinite(r.proj_lat) && Number.isFinite(r.proj_lon) &&
+        Number.isFinite(r.proj_point_X) && Number.isFinite(r.proj_point_Y) &&
+        Number.isFinite(r.point_X) && Number.isFinite(r.point_Y)
+      )
+
+      if (!validRows.length) return []
+
+      var cell = joinThresholdM + 0.5
+      var buckets = new Map()
+      var maxNearest = 3
+
+      function bucketKey(ix, iy) {
+        return `${ix}|${iy}`
+      }
+
+      for (var i = 0; i < validRows.length; i++) {
+        var x = Number(validRows[i].point_X)
+        var y = Number(validRows[i].point_Y)
+        var ix = Math.floor(x / cell)
+        var iy = Math.floor(y / cell)
+        var key = bucketKey(ix, iy)
+        if (!buckets.has(key)) buckets.set(key, [])
+        buckets.get(key).push(i)
+      }
+
+      var nearest = Array.from({ length: validRows.length }, () => [])
+      for (var i = 0; i < validRows.length; i++) {
+        var xi = Number(validRows[i].point_X)
+        var yi = Number(validRows[i].point_Y)
+        var iix = Math.floor(xi / cell)
+        var iiy = Math.floor(yi / cell)
+        var candidatesForI = []
+
+        for (var dxCell = -1; dxCell <= 1; dxCell++) {
+          for (var dyCell = -1; dyCell <= 1; dyCell++) {
+            var key = bucketKey(iix + dxCell, iiy + dyCell)
+            var candidates = buckets.get(key) || []
+            for (var c = 0; c < candidates.length; c++) {
+              var j = candidates[c]
+              if (j === i) continue
+              var xj = Number(validRows[j].point_X)
+              var yj = Number(validRows[j].point_Y)
+              var d = Math.hypot(xi - xj, yi - yj)
+              if (Number.isFinite(d) && d <= cell) {
+                candidatesForI.push({ j: j, d: d })
+              }
+            }
+          }
+        }
+
+        // Filter by transect orientation: only join if vectors point similarly (dot product > 0.7).
+        var uxi = Number(validRows[i].ux1)
+        var uyi = Number(validRows[i].uy1)
+        if (Number.isFinite(uxi) && Number.isFinite(uyi)) {
+          candidatesForI = candidatesForI.filter(item => {
+            var uxj = Number(validRows[item.j].ux1)
+            var uyj = Number(validRows[item.j].uy1)
+            if (!Number.isFinite(uxj) || !Number.isFinite(uyj)) return true
+            var dotprod = uxi * uxj + uyi * uyj
+            return dotprod > 0.7
+          })
+        }
+
+        candidatesForI.sort((a, b) => a.d - b.d)
+        nearest[i] = candidatesForI.slice(0, maxNearest)
+      }
+
+      var nearestSet = nearest.map(list => {
+        var s = new Set()
+        list.forEach(item => s.add(item.j))
+        return s
+      })
+
+      // Keep only mutual-nearest candidates to reduce cross-links in curved sections.
+      var candidateEdges = []
+      for (var i = 0; i < validRows.length; i++) {
+        for (var c = 0; c < nearest[i].length; c++) {
+          var j = nearest[i][c].j
+          var d = nearest[i][c].d
+          if (j <= i) continue
+          if (nearestSet[j].has(i)) {
+            candidateEdges.push({ i: i, j: j, d: d })
+          }
+        }
+      }
+
+      candidateEdges.sort((a, b) => a.d - b.d)
+
+      var adjacency = Array.from({ length: validRows.length }, () => new Set())
+      var degree = new Array(validRows.length).fill(0)
+
+      // Enforce max degree 2 so each point joins at most two neighbors (chain-like geometry).
+      for (var e = 0; e < candidateEdges.length; e++) {
+        var edge = candidateEdges[e]
+        if (degree[edge.i] >= 2 || degree[edge.j] >= 2) continue
+        adjacency[edge.i].add(edge.j)
+        adjacency[edge.j].add(edge.i)
+        degree[edge.i] += 1
+        degree[edge.j] += 1
+      }
+
+      var visited = new Array(validRows.length).fill(false)
+      var runs = []
+
+      for (var i = 0; i < validRows.length; i++) {
+        if (visited[i] || adjacency[i].size === 0) continue
+        var stack = [i]
+        visited[i] = true
+        var component = []
+
+        while (stack.length) {
+          var n = stack.pop()
+          component.push(n)
+          var nbrs = Array.from(adjacency[n])
+          for (var k = 0; k < nbrs.length; k++) {
+            var nb = nbrs[k]
+            if (!visited[nb]) {
+              visited[nb] = true
+              stack.push(nb)
+            }
+          }
+        }
+
+        if (component.length < 2) continue
+
+        var componentSet = new Set(component)
+        var endpoints = component.filter(idx => {
+          var degInComp = 0
+          adjacency[idx].forEach(nb => {
+            if (componentSet.has(nb)) degInComp += 1
+          })
+          return degInComp === 1
+        })
+
+        var start = endpoints.length ? endpoints[0] : component[0]
+        var ordered = []
+        var used = new Set()
+        var prev = null
+        var cur = start
+
+        while (cur !== null && !used.has(cur)) {
+          ordered.push(cur)
+          used.add(cur)
+          var next = null
+          var nbrs = Array.from(adjacency[cur]).filter(nb => componentSet.has(nb) && !used.has(nb))
+          if (nbrs.length === 1) {
+            next = nbrs[0]
+          } else if (nbrs.length > 1) {
+            if (prev !== null) {
+              next = nbrs.find(nb => nb !== prev) ?? nbrs[0]
+            } else {
+              next = nbrs[0]
+            }
+          }
+          prev = cur
+          cur = next
+        }
+
+        if (ordered.length < 2) continue
+
+        var coords = []
+        var rates = []
+        var ids = []
+        for (var c = 0; c < ordered.length; c++) {
+          var idx = ordered[c]
+          coords.push([Number(validRows[idx].proj_lat), Number(validRows[idx].proj_lon)])
+          rates.push(Number(validRows[idx][rateField]))
+          ids.push(rowId(validRows[idx]))
+        }
+
+        var finiteRates = rates.filter(v => Number.isFinite(v))
+        var meanRate = finiteRates.length
+          ? finiteRates.reduce((s, v) => s + v, 0) / finiteRates.length
+          : NaN
+
+        runs.push({ coords: coords, meanRate: meanRate, ids: ids })
+      }
+
+      return runs
+    }
+
+    function buildRowLookup(rows) {
+      var m = new Map()
+      rows.forEach(r => m.set(rowId(r), r))
+      return m
+    }
+
+    function coordsFromRunIds(ids, lookup) {
+      var coords = []
+      for (var i = 0; i < ids.length; i++) {
+        var r = lookup.get(ids[i])
+        if (!r) continue
+        if (Number.isFinite(r.proj_lat) && Number.isFinite(r.proj_lon)) {
+          coords.push([Number(r.proj_lat), Number(r.proj_lon)])
+        }
+      }
+      return coords
+    }
+
+    function clearScenario(scenario) {
+      scenarioLayers[scenario].line.clearLayers()
+      scenarioLayers[scenario].uncertainty.clearLayers()
+    }
+
+    async function renderScenario(year, scenario) {
+      clearScenario(scenario)
+      var color = SCENARIO_COLORS[scenario]
+      var uncColor = chroma(color).brighten(1.5).css()
+
+      var rows50 = await loadDataset(year, scenario, '0.5')
+      var rows17 = await loadDataset(year, scenario, '0.17')
+      var rows83 = await loadDataset(year, scenario, '0.83')
+
+      var runs50 = buildProjectedRuns(rows50, 'R_SLR_rate')
+      var lookup17 = buildRowLookup(rows17)
+      var lookup83 = buildRowLookup(rows83)
+
+      runs50.forEach(function(run) {
+        var coords17 = coordsFromRunIds(run.ids, lookup17)
+        if (coords17.length >= 2) {
+          scenarioLayers[scenario].uncertainty.addLayer(
+            L.polyline(coords17, { color: uncColor, weight: 2, opacity: 0.6, dashArray: '5,5', lineCap: 'round', lineJoin: 'round' })
+          )
+        }
+        var coords83 = coordsFromRunIds(run.ids, lookup83)
+        if (coords83.length >= 2) {
+          scenarioLayers[scenario].uncertainty.addLayer(
+            L.polyline(coords83, { color: uncColor, weight: 2, opacity: 0.6, dashArray: '5,5', lineCap: 'round', lineJoin: 'round' })
+          )
+        }
+      })
+
+      runs50.forEach(function(run) {
+        var pl = L.polyline(run.coords, {
+          color: color,
+          weight: 3.5,
+          opacity: 0.95,
+          lineCap: 'round',
+          lineJoin: 'round',
+        })
+        if (Number.isFinite(run.meanRate)) {
+          pl.bindPopup(
+            `Scenario: SSP${scenario}<br>` +
+            `Year: ${year}<br>` +
+            `Percentile: 0.5<br>` +
+            `Mean retreat rate: ${run.meanRate.toFixed(3)} m/yr<br>` +
+            `Total retreat: ${(run.meanRate * (Number(year) - 2020)).toFixed(2)} m`
+          )
+        }
+        scenarioLayers[scenario].line.addLayer(pl)
+      })
+    }
+
+    async function renderAllActiveScenarios() {
+      if (window.popup) map.closePopup(window.popup)
+      await Promise.all(Array.from(activeScenarios).map(s => renderScenario(activeYear, s)))
+      // Clear inactive scenarios
+      SCENARIOS.forEach(function(s) {
+        if (!activeScenarios.has(s)) clearScenario(s)
+      })
+      refreshLegend()
+      var allGroups = SCENARIOS.flatMap(s => [scenarioLayers[s].line, scenarioLayers[s].uncertainty])
+      var combinedBounds = L.featureGroup(allGroups).getBounds()
+      if (combinedBounds.isValid()) {
+        map.fitBounds(combinedBounds, { padding: [20, 20] })
+      }
+    }
+
+    // Load selected Step 5 CSV and initialize map
     async function loadDataAndInitializeMap() {
       try {
-        const [bruunruleData, nzSeaRiseData] = await Promise.all([
-          parseCSV('bruunrule_JaMoNoRaSoWa_b_10_with_rates.csv'),
-          parseCSV('NZSeaRise_proj_novlm.csv')
-        ]);
-
-        window.bruunruleData = bruunruleData
-        window.nzSeaRiseData = nzSeaRiseData
-        console.log({bruunruleData, nzSeaRiseData})
-
-        var points = bruunruleData.map(r => [parseFloat(r.lat), parseFloat(r.lon)])
-
-        L.glify.points({
-          map: map,
-          data: points,
-          size: 10,
-          fragmentShaderSource: L.glify.shader.fragment.simpleCircle,
-          sensitivity: 5,
-          sensitivityHover: 5,
-          color: function(index, point) {
-            var r = bruunruleData[index]
-            if (!r.R) {
-              return {r:0, g:0, b:0}
-            }
-            var c = cmap(r.R).gl()
-            return { r: c[0], g: c[1], b: c[2] };
-          },
-          click: function (e, point, xy) {
-            if (!point) return;
-            var i = points.indexOf(point);
-            var r = bruunruleData[i];
-            console.log(r);
-            $("#plot").remove()
-            if (window.popup) map.closePopup(window.popup)
-
-            var confidence_level = "medium_confidence"
-            var year = 2150
-            var percentile = 0.5
-            var scenario = 7
-            var SLR_ID = r["Site ID"]
-            var SLR = nzSeaRiseData.find(d => d.site == SLR_ID && d.Confidence == confidence_level && d.year == year && d.scenario == scenario)
-            console.log(SLR)
-            var R_SLR = SLR[0.5] * r.R
-            var ER_SLR = R_SLR / (year - 2020)
-
-            window.popup = L.popup({minWidth: 800})
-              .setContent(`Unique ID: ${r.Unique_ID}<br>
-              Scenario: ${scenario}<br>  
-              Distance to WHACS point: ${r.dist_m.toLocaleString()}m<br>
-                Distance to Mean High Water Line: ${r.mean_dist_to_coast.toLocaleString()}m<br>
-                Closure Depth (h): ${r.CD.toLocaleString()}m<br>
-                Dune height (B): ${r.B.toLocaleString()}m<br>
-                Distance from the dune peak to the depth of closure (L): ${r.L.toLocaleString()}m<br>
-                Shoreline recession (R): ${r.R.toLocaleString()}m<br>
-                tanβ (slope): ${r.tanbeta.toLocaleString()}<br>
-                Projected Sea Level Rise at ${year} (S_SLR): p50:${SLR[0.5].toFixed(2)} m (p17:${SLR[0.17]}m - p83:${SLR[0.83]}m)<br>
-                Bruun Rule predicted shoreline retreat at ${year} (R_SLR): p50: ${(r.R * SLR[0.5]).toLocaleString()} (p17: ${(r.R * SLR[0.17]).toLocaleString()}m - p83: ${(r.R * SLR[0.83]).toLocaleString()}m)<br>
-                Bruun Rule predicted shoreline retreat per year (ER_SLR): ${(r.R * SLR[0.5] / (year - 2020)).toLocaleString()} m/yr (p17:${(r.R * SLR[0.17] / (year - 2020)).toLocaleString()}m/yr - p83:${(r.R * SLR[0.83] / (year - 2020)).toLocaleString()}m/yr)<br>
-                WHACS point latitude: ${r.wave_lat}<br>
-                WHACS point longitude: ${r.wave_lon}<br>
-                NZCCD Results:<br>
-                Region: ${r.Region}<br>
-                Net shoreline movement: ${r.NSM}m<br>
-                Shoreline change envelope: ${r.SCE}m<br>
-                End point rate: ${r.EPR}m ± ${r.EPRunc}m<br>
-                Rate of change: ${r.LRR} m/yr ± ${r.LCI} m/yr<br>
-                R² score: ${r.LR2}<br>
-                Standard error: ${r.LSE}<br>
-                Weighted rate of change: ${r.WLR} m/yr ± ${r.WCI} m/yr<br>
-                Weighted R² score: ${r.WR2}<br>
-                Weighted standard error: ${r.WSE}<br>
-                Shoreline count: ${r.ShrCount}<br>
-                Total Cumulative Distance (TCD): ${r.TCD.toLocaleString()} m<br>
-                Data duration: ${r.Duration} years (${r.Start_date} - ${r.End_date})<br>
-              `)
-              .setLatLng(point)
-              .addTo(map);
-          },
-        });
+        await renderAllActiveScenarios()
         map.spin(false);
       } catch (error) {
         console.error('Failed to load data:', error);
@@ -280,13 +596,9 @@
     var legend = L.control({ position: 'bottomright' });
 
     legend.onAdd = function (map) {
-      var div = L.DomUtil.create('div', 'info legend');
-      div.innerHTML += "<h4>Bruun retreat (m)</h4>"
-      for (var i = 0; i <= 1000; i += 200) {
-        div.innerHTML += `<i style="background:${cmap(i).css()}"></i>${i}<br>`
-      }
-      div.innerHTML += `<i style="background:black"></i>Uncertain<br>`
-      return div;
+      legendDiv = L.DomUtil.create('div', 'info legend');
+      legendDiv.innerHTML = '<h4>Scenarios</h4>';
+      return legendDiv;
     };
 
     legend.addTo(map);

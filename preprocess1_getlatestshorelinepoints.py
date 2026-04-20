@@ -5,14 +5,11 @@ Created on Thu Oct 23 09:43:54 2025
 
 @author: yshe948
 """
-from glob import glob
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
-from tqdm import tqdm
-from tqdm.contrib.concurrent import thread_map, process_map
 
 # output
 outputloc = r"input/shorelinepoints"
@@ -23,80 +20,117 @@ grandparent_folder = os.path.dirname(os.path.dirname(current_script))
 os.makedirs(os.path.join(grandparent_folder, outputloc), exist_ok=True)
 
 # input
-to_keep = ["Unique_ID", "Date", "Distance", "geometry"]
 crsused = 2193
-inputfolder = os.path.join(
-    grandparent_folder, "input/Merged Intersects_UniqueID"
-)  # Merged Intersects_UniqueID_test only Waihekeisland as an eample to test
+input_csv = os.path.join(os.path.dirname(current_script), "slpoints_rates.csv")
 
-to_drop = []
-files = sorted(glob(os.path.join(inputfolder, "*.shp")))
-pointsall = []
-prefixes = []
-for file in tqdm(files):
-    filename = os.path.basename(file)
-    name_no_ext = os.path.splitext(filename)[0]  # 'WaihekeIsland_Intersects'
-    prefix = name_no_ext[:2]  # 'Wa'
-    prefixes.append(prefix)
-    points_individualfile = gpd.read_file(file)
-    for col in points_individualfile.columns:
-        if col not in to_keep:
-            to_drop.append(col)
+required_cols = [
+    "Distance",
+    "IntersectX",
+    "IntersectY",
+    "Unique_ID",
+    "Date",
+    "NSM",
+    "WLR",
+    "Region",
+    "Start_date",
+    "End_date",
+    "Duration",
+]
 
-    points_individualfile.drop(to_drop, axis=1, inplace=True)
-    pointsall.append(points_individualfile)
-    del points_individualfile
+points = pd.read_csv(input_csv, low_memory=False)
+missing_cols = [col for col in required_cols if col not in points.columns]
+if missing_cols:
+    raise KeyError(f"missing required columns in {input_csv}: {missing_cols}")
 
-merged_prefixes = "".join(prefixes)
+# Keep only fields required for downstream matching and requested exports.
+points = points[required_cols].copy()
+points["Distance"] = pd.to_numeric(points["Distance"], errors="coerce")
+points["IntersectX"] = pd.to_numeric(points["IntersectX"], errors="coerce")
+points["IntersectY"] = pd.to_numeric(points["IntersectY"], errors="coerce")
+points["WLR"] = pd.to_numeric(points["WLR"], errors="coerce")
+points["Date_dt"] = pd.to_datetime(points["Date"], dayfirst=True, errors="coerce")
 
-points = gpd.GeoDataFrame(pd.concat(pointsall, ignore_index=True), crs=pointsall[0].crs)
-points = points.to_crs(epsg=crsused)
+# Remove rows that cannot be placed or grouped reliably.
+points = points.dropna(subset=["Unique_ID", "IntersectX", "IntersectY", "Date_dt"])
+
+# Remove rows with missing/zero retreat rate so unmatched join-fill rows are excluded.
+points = points[points["WLR"].notna() & (points["WLR"] != 0)].copy()
+
+# Preserve full per-transect history for orientation vectors before selecting latest rows.
+points_for_vectors = points.copy()
 
 outputfile_path_points_gpkg = os.path.join(
-    grandparent_folder, outputloc, f"lastestuniquepoints_{merged_prefixes}.gpkg"
+    grandparent_folder, outputloc, "latestuniquepoints_merged.gpkg"
 )
 outputfile_path_points_shp = os.path.join(
-    grandparent_folder, outputloc, f"lastestuniquepoints_{merged_prefixes}.shp"
+    grandparent_folder, outputloc, "latestuniquepoints_merged.shp"
 )
 
 
-def get_latest(tid):
-    # only use the lastest date of each points in shape file
-    subset = points[points.Unique_ID == tid]
-    seaward_point_distance = subset["Distance"].min()
-    landward_point_distance = subset["Distance"].max()
-    seaward_point = subset[subset["Distance"] == seaward_point_distance].copy()
-    landward_point = subset[subset["Distance"] == landward_point_distance].copy()
-    seaward_geom = seaward_point.geometry.iloc[0]
-    landward_geom = landward_point.geometry.iloc[0]
+def calc_transect_unit_vector(group):
+    group_valid = group.dropna(subset=["Distance", "IntersectX", "IntersectY"])
+    if group_valid.empty:
+        return pd.Series({"ux1": np.nan, "uy1": np.nan})
 
-    dx_line1 = -seaward_geom.x + landward_geom.x
-    dy_line1 = -seaward_geom.y + landward_geom.y
+    seaward = group_valid.loc[group_valid["Distance"].idxmin()]
+    landward = group_valid.loc[group_valid["Distance"].idxmax()]
+
+    dx_line1 = -seaward["IntersectX"] + landward["IntersectX"]
+    dy_line1 = -seaward["IntersectY"] + landward["IntersectY"]
     length1 = np.hypot(dx_line1, dy_line1)
 
-    # Unit vector in the transect direction
-    ux1, uy1 = dx_line1 / length1, dy_line1 / length1
+    if length1 == 0:
+        return pd.Series({"ux1": np.nan, "uy1": np.nan})
 
-    latest_date = subset["Date"].max()
-    subset_latest = subset[subset["Date"] == latest_date].copy()
-    subset_latest.loc[:, "ux1"] = ux1
-    subset_latest.loc[:, "uy1"] = uy1
-    return subset_latest
+    return pd.Series({"ux1": dx_line1 / length1, "uy1": dy_line1 / length1})
 
 
-def get_unique_lastest_point(points):
-    unique_IDs = points.Unique_ID.unique().tolist()
-    # Combine them all into one DataFrame
-    subsets = process_map(
-        get_latest, unique_IDs, desc="Processing transects", ncols=80, chunksize=100
-    )
-    lastestuniquepoints = gpd.GeoDataFrame(pd.concat(subsets, ignore_index=True))
-    return lastestuniquepoints
+# Keep latest point per transect by Date (no distance-based tie-break).
+points = points.drop_duplicates(
+    subset=[c for c in points.columns if c != "Date_dt"]
+)
+points = points.sort_values(["Unique_ID", "Date_dt"], ascending=[True, False])
+points = points.drop_duplicates(subset=["Unique_ID"], keep="first")
+lastestuniquepoints = points.copy()
 
+# Add transect direction vectors from full transect history.
+transect_vectors = points_for_vectors.groupby("Unique_ID", group_keys=False).apply(
+    calc_transect_unit_vector
+)
+lastestuniquepoints = lastestuniquepoints.merge(
+    transect_vectors.reset_index(), on="Unique_ID", how="left"
+)
 
-lastestuniquepoints = get_unique_lastest_point(points)
+lastestuniquepoints = gpd.GeoDataFrame(
+    lastestuniquepoints,
+    geometry=gpd.points_from_xy(
+        lastestuniquepoints["IntersectX"], lastestuniquepoints["IntersectY"]
+    ),
+    crs=f"EPSG:{crsused}",
+)
 lastestuniquepoints["point_X"] = lastestuniquepoints.geometry.x
 lastestuniquepoints["point_Y"] = lastestuniquepoints.geometry.y
+
+# Preserve requested fields and required geometry/vector fields.
+keep_cols = [
+    "Distance",
+    "IntersectX",
+    "IntersectY",
+    "Unique_ID",
+    "Date",
+    "NSM",
+    "WLR",
+    "Region",
+    "Start_date",
+    "End_date",
+    "Duration",
+    "ux1",
+    "uy1",
+    "point_X",
+    "point_Y",
+    "geometry",
+]
+lastestuniquepoints = lastestuniquepoints[keep_cols].copy()
 
 ## save data
 lastestuniquepoints.to_file(outputfile_path_points_gpkg, driver="GPKG")
@@ -110,8 +144,8 @@ lastestuniquepoints.to_file(outputfile_path_points_shp, driver="ESRI Shapefile")
 ## figure
 fig1, ax1 = plt.subplots(figsize=(100, 100))
 plt.scatter(
-    lastestuniquepoints["point_X"],
-    lastestuniquepoints["point_Y"],
+    lastestuniquepoints["IntersectX"],
+    lastestuniquepoints["IntersectY"],
     c="red",
     s=1,
     alpha=0.7,
@@ -122,7 +156,7 @@ ax1.set_aspect("equal")
 
 fig1.savefig(
     os.path.join(
-        grandparent_folder, outputloc, f"lastestuniquepoints_{merged_prefixes}.png"
+        grandparent_folder, outputloc, "latestuniquepoints_merged.png"
     ),
     dpi=300,
     bbox_inches="tight",
