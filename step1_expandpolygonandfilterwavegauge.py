@@ -15,7 +15,8 @@ import xarray as xr
 
 # input
 shorelinepointfileloc = r"input/shorelinepoints"
-shorelinepointfilename = "JaMoNoRaSoWa"  # JaMoNoRaSoWa
+shorelinepointfilename = "merged"
+shorelinepointfile = "latestuniquepoints_merged.gpkg"
 buffer_dist = 14000  # unit m for search wave gauge
 wavedatafile = r"input/wavedata/whacs_fp/fp_WHACS_hindcast_WHACS_ERA5_1hr_197901010000-197901312300.nc"
 
@@ -40,7 +41,7 @@ gdf = gpd.read_file(
     os.path.join(
         grandparent_folder,
         shorelinepointfileloc,
-        f"lastestuniquepoints_{shorelinepointfilename}.gpkg",
+        shorelinepointfile,
     )
 )
 print("shp CRS:", gdf.crs)

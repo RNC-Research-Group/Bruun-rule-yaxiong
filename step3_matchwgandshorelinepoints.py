@@ -20,10 +20,30 @@ from itertools import chain
 # input
 inputcoastlineloc = r"input/coastline"
 inputshorelinepoints = r"input/shorelinepoints"
+# automatically choose local shoreline point gpkg
+base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+inputshorelinepoints = os.path.join(base_dir, "input/shorelinepoints")
+files = [f for f in os.listdir(inputshorelinepoints) if f.endswith(".gpkg")]
+if not files:
+    raise FileNotFoundError("no shoreline point gpkg found")
+preferred_file = "lastestuniquepoints_JaMoNoRaSoWa.gpkg"
+preferred_file = "latestuniquepoints_merged.gpkg"
+if preferred_file not in files:
+    raise FileNotFoundError(
+        f"required shoreline file not found: {preferred_file} in {inputshorelinepoints}"
+    )
+inputshorelinepointsfilename = preferred_file
+
+# derive base filename (without prefix/suffix) for wave data
+shorelinepointfilename = os.path.splitext(
+    inputshorelinepointsfilename.replace("lastestuniquepoints_", "").replace(
+        "latestuniquepoints_", ""
+    )
+)[0]
+
+# wave gauge input location and filename pattern
 inputWGloc = r"input/wavedata/WGselected"
-shorelinepointfilename = "JaMoNoRaSoWa"
 wavedatafilename = f"wavedatasum_{shorelinepointfilename}_1979-01-01_2024-01-01.gpkg"
-inputshorelinepointsfilename = f"lastestuniquepoints_{shorelinepointfilename}.gpkg"
 
 num_nearst_WG = 4  # number of nearest wave points to get
 extend_landward_m = 200  # meters to extend beyond start
@@ -31,7 +51,7 @@ extend_seaward_m = 2000  # meters to extend beyond end
 
 # output
 outputloc = r"output/match"
-transect_wp_gpkg = f"transect_wp_{shorelinepointfilename}.gpkg"
+transect_wp_gpkg = "transect_wp.gpkg"
 
 
 # current folder
@@ -185,15 +205,17 @@ transect_wp_lines = gpd.GeoDataFrame(
     rows_intersection, geometry="geometry", crs=gdf_WG.crs
 )
 # del rows
-transect_wp = (
-    transect_wp_lines[
-        (transect_wp_lines["n_intersections"] == 1)
-        & (transect_wp_lines["mean_dist_to_coast"] < extend_landward_m)
-    ]  # keep only intersection=1
-    .sort_values(["point_X", "point_Y", "dist_m"])  # sort so smallest distance first
-    .groupby(["point_X", "point_Y"], as_index=False)  # group by transect point
-    .first()  # keep first (min dist)
-)
+transect_wp_filtered = transect_wp_lines[
+    (transect_wp_lines["n_intersections"] == 1)
+    & (transect_wp_lines["mean_dist_to_coast"] < extend_landward_m)
+]  # keep only intersection=1
+transect_wp_filtered = transect_wp_filtered.sort_values(
+    ["point_X", "point_Y", "dist_m"]
+)  # sort so smallest distance first
+# Group by transect point and keep first (min dist) while preserving Unique_ID and other columns
+transect_wp = transect_wp_filtered.groupby(
+    ["point_X", "point_Y"], as_index=False, dropna=False
+).first()  # keep first (min dist) — first() preserves all columns
 transect_wp = gpd.GeoDataFrame(transect_wp, geometry="geometry", crs=gdf_WG.crs)
 transect_wp.to_file(
     os.path.join(grandparent_folder, outputloc, transect_wp_gpkg), driver="GPKG"

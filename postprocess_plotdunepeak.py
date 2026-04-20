@@ -9,18 +9,14 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import os
 
-shorelinepointfilename = "JaMoNoRaSoWa"  # JaMoNoRaSoWa
-inputloc = r"output\match"
+inputloc = r"output/dunepeak"
+outputloc = r"output/dunepeak"
 
-outputloc = "input\SLR"
-
-
-buffer_dist = 10  # unit m
-inputloc = r"output\dunepeak"
-inputfilename = f"{shorelinepointfilename}_dunepeak_{buffer_dist}.gpkg"
+buffer_dist = 5  # unit m
+inputfilename = "dunepeak_pct1_fw10_bw50_s5.gpkg"
 current_script = os.path.abspath(__file__)
 grandparent_folder = os.path.dirname(os.path.dirname(current_script))
-outputfigname = f"{shorelinepointfilename}_dunepeak_{buffer_dist}.png"
+outputfigname = "dunepeak_pct1_fw10_bw50_s5.png"
 
 dunepeak = gpd.read_file(os.path.join(grandparent_folder, inputloc, inputfilename))
 # sys.exit()
@@ -43,7 +39,7 @@ cbar.set_ylabel("Elevation (m)", fontsize=10)
 mean_var = dunepeak[var].mean()
 std_var = dunepeak[var].std()
 ax.set_title(
-    f"{shorelinepointfilename}: \n buffer={buffer_dist} m \n dunepeak={mean_var:.1f}±{std_var:.1f} m",
+    f"buffer={buffer_dist} m \n dunepeak={mean_var:.1f}±{std_var:.1f} m",
     fontsize=10,
 )
 ax.set_xlabel("x (m)")

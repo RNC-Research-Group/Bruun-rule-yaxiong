@@ -15,7 +15,7 @@ from tqdm.auto import tqdm
 
 # input
 inputloc = r"input/wavedata"
-shorelinepointfilename = "JaMoNoRaSoWa"  # JaMoNoRaSoWa
+shorelinepointfilename = "merged"
 
 # output
 outputloc = r"input/wavedata/WGselected"

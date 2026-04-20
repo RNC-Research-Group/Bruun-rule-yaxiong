@@ -1,71 +1,131 @@
 #!/usr/bin/env python3
 import os
-import pandas as pd
 import geopandas as gpd
+from slr_settings import CONFIDENCE_LEVEL, YEARS, SCENARIOS, PERCENTILES_STR
 
-# input loc
-buffer_dist = 10
-confidence_level = "medium_confidence"
-year = 2150
-percentile = "0.5"
-scenario = 4.5
+# Iteration settings requested.
+# Note: slr_settings.py defines WHICH confidence/year/scenario/percentile
+# combinations are processed; it does not generate SLR values itself.
+confidence_level = CONFIDENCE_LEVEL
+years = YEARS
+scenarios = SCENARIOS
+percentiles = PERCENTILES_STR
 
-# Note the typo here, brunnrule instead of bruunrule
-inputfilename = f"../output/brunnrule/brunnrule_JaMoNoRaSoWa_buffer_{buffer_dist}.gpkg"
-SLR_matchfile = f"../input/SLR/JaMoNoRaSoWa_SLR_match.gpkg"
-SLR_scenariofile = f"../input/SLR/{confidence_level}_y_{year}_s_{scenario}.gpkg"
-currentyear = 2020  # The current year is used to calculate the erosion rate. Ideally, it should correspond to the mean date of the most recent shoreline points.
+currentyear = 2020  # used to convert recession distance to annual rate
 
-# SLR data
-SLR_match = gpd.read_file(SLR_matchfile)
-SLR_scenario = gpd.read_file(SLR_scenariofile)
-print(SLR_matchfile, SLR_match.crs)
-print(SLR_scenariofile, SLR_scenario.crs)
-data = gpd.read_file(inputfilename)
-print(inputfilename, data.crs)
-SLR_scenario = SLR_scenario.to_crs(data.crs)
-print(SLR_scenariofile, SLR_scenario.crs)
-years_delta = year - currentyear
-print(years_delta)
+current_script = os.path.abspath(__file__)
+grandparent_folder = os.path.dirname(os.path.dirname(current_script))
 
-# Vectorized lookup to avoid per-row filtering
-# Ensure indices are unique before mapping
-site_lookup = SLR_match.drop_duplicates(subset="Unique_ID").set_index("Unique_ID")[
+inputfilename = os.path.join(grandparent_folder, "output/bruunrule/bruunrule.gpkg")
+slr_matchfile = os.path.join(grandparent_folder, "input/SLR/merged_SLR_match.gpkg")
+if not os.path.exists(slr_matchfile):
+    slr_matchfile = os.path.join(grandparent_folder, "input/SLR/SLR_match.gpkg")
+confidence_level_filename = confidence_level.replace(" ", "_")
+
+# Base data
+slr_match = gpd.read_file(slr_matchfile)
+base_data = gpd.read_file(inputfilename)
+print(slr_matchfile, slr_match.crs)
+print(inputfilename, base_data.crs)
+
+site_lookup = slr_match.drop_duplicates(subset="Unique_ID").set_index("Unique_ID")[
     "Site ID"
 ]
-scenario_lookup = SLR_scenario.drop_duplicates(subset="Site ID").set_index("Site ID")[
-    percentile
-]
 
-data["Site ID"] = data["Unique_ID"].map(site_lookup)
-#data["S_SLR"] = data["Site ID"].map(scenario_lookup)
-#data["R_SLR"] = data["S_SLR"] * data["R"]
-#data["ER_SLR"] = data["R_SLR"] / years_delta
+for year in years:
+    for scenario in scenarios:
+        slr_scenariofile = os.path.join(
+            grandparent_folder,
+            f"input/SLR/{confidence_level_filename}_y_{year}_s_{scenario}.gpkg",
+        )
 
-data["lat"] = data.geometry.to_crs(4326).y
-data["lon"] = data.geometry.to_crs(4326).x
+        if not os.path.exists(slr_scenariofile):
+            print(f"Skip missing file: {slr_scenariofile}")
+            continue
 
-wave_points = gpd.points_from_xy(data.wave_X, data.wave_Y, crs=data.crs).to_crs(4326)
-data["wave_lat"] = wave_points.y
-data["wave_lon"] = wave_points.x
+        slr_scenario = gpd.read_file(slr_scenariofile).to_crs(base_data.crs)
+        years_delta = year - currentyear
+        print(slr_scenariofile, slr_scenario.crs)
+        print(f"Processing year={year}, scenario={scenario}, years_delta={years_delta}")
 
-cols_for_map = [
-    "Unique_ID",
-    "dist_m",
-    "mean_dist_to_coast",
-    "CD",
-    "B",
-    "L",
-    "R",
-    "tanbeta",
-    "Site ID",
-    #"S_SLR",
-    #"R_SLR",
-    #"ER_SLR",
-    "lat",
-    "lon",
-    "wave_lat",
-    "wave_lon",
-]
-print(data[cols_for_map])
-data[cols_for_map].to_csv(f"bruunrule_JaMoNoRaSoWa_b_{buffer_dist}.csv", index=False, float_format="%.6f")
+        for percentile in percentiles:
+            percentile_col = (
+                percentile
+                if percentile in slr_scenario.columns
+                else float(percentile)
+            )
+            if percentile_col not in slr_scenario.columns:
+                print(
+                    f"Skip percentile={percentile} for {slr_scenariofile}; column not found"
+                )
+                continue
+
+            output_gpkg = os.path.join(
+                grandparent_folder,
+                f"output/bruunrule/bruunrule_{confidence_level_filename}_y_{year}_s_{scenario}_p_{percentile}.gpkg",
+            )
+
+            scenario_lookup = slr_scenario.drop_duplicates(subset="Site ID").set_index(
+                "Site ID"
+            )[percentile_col]
+
+            out = base_data.copy()
+            out["Site ID"] = out["Unique_ID"].map(site_lookup)
+            out["S_SLR"] = out["Site ID"].map(scenario_lookup)
+            out["R_SLR"] = out["S_SLR"] * out["R"]
+            out["R_SLR_rate"] = out["R_SLR"] / years_delta
+
+            # Project shoreline position along the same transect convention as step4
+            # (x_new/y_new uses newx_profile = -R).
+            out["proj_point_X"] = out["point_X"] + out["ux1"] * (-out["R_SLR"])
+            out["proj_point_Y"] = out["point_Y"] + out["uy1"] * (-out["R_SLR"])
+
+            out["lat"] = out.geometry.to_crs(4326).y
+            out["lon"] = out.geometry.to_crs(4326).x
+
+            projected_points = gpd.points_from_xy(
+                out["proj_point_X"], out["proj_point_Y"], crs=out.crs
+            ).to_crs(4326)
+            out["proj_lat"] = projected_points.y
+            out["proj_lon"] = projected_points.x
+
+            wave_points = gpd.points_from_xy(
+                out.wave_X, out.wave_Y, crs=out.crs
+            ).to_crs(4326)
+            out["wave_lat"] = wave_points.y
+            out["wave_lon"] = wave_points.x
+
+            cols_for_map = [
+                "Unique_ID",
+                "dist_m",
+                "mean_dist_to_coast",
+                "CD",
+                "B",
+                "L",
+                "R",
+                "tanbeta",
+                "Site ID",
+                "S_SLR",
+                "R_SLR",
+                "R_SLR_rate",
+                "lat",
+                "lon",
+                "point_X",
+                "point_Y",
+                "ux1",
+                "uy1",
+                "proj_point_X",
+                "proj_point_Y",
+                "proj_lat",
+                "proj_lon",
+                "wave_lat",
+                "wave_lon",
+            ]
+
+            output_csv = os.path.join(
+                grandparent_folder,
+                f"output/bruunrule/NZ_{confidence_level_filename}_y{year}_s{scenario}_p{percentile}.csv",
+            )
+            out[cols_for_map].to_csv(output_csv, index=False, float_format="%.6f")
+            out.to_file(output_gpkg, driver="GPKG")
+            print(f"Saved SLR-enriched output: {output_gpkg}")
