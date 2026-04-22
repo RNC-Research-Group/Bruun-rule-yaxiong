@@ -300,6 +300,12 @@
       return String(row.Unique_ID)
     }
 
+    function historicRetreatRateFromWlr(row) {
+      var wlr = Number(row.WLR)
+      if (Number.isFinite(wlr)) return wlr
+      return NaN
+    }
+
     function buildProjectedRuns(rows, rateField) {
       var validRows = rows.filter(r =>
         Number.isFinite(r.proj_lat) && Number.isFinite(r.proj_lon) &&
@@ -477,7 +483,21 @@
           ? finiteRates.reduce((s, v) => s + v, 0) / finiteRates.length
           : NaN
 
-        runs.push({ coords: coords, meanRate: meanRate, ids: ids })
+        var historicRetreatRates = []
+        for (var h = 0; h < ordered.length; h++) {
+          var histRate = historicRetreatRateFromWlr(validRows[ordered[h]])
+          if (Number.isFinite(histRate)) historicRetreatRates.push(histRate)
+        }
+        var meanHistoricRetreatRate = historicRetreatRates.length
+          ? historicRetreatRates.reduce((s, v) => s + v, 0) / historicRetreatRates.length
+          : NaN
+
+        runs.push({
+          coords: coords,
+          meanRate: meanRate,
+          meanHistoricRetreatRate: meanHistoricRetreatRate,
+          ids: ids,
+        })
       }
 
       return runs
@@ -543,11 +563,15 @@
           lineJoin: 'round',
         })
         if (Number.isFinite(run.meanRate)) {
+          var historicLine = Number.isFinite(run.meanHistoricRetreatRate)
+            ? `Historic retreat rate: ${run.meanHistoricRetreatRate.toFixed(3)} m/yr<br>`
+            : 'Historic retreat rate: n/a<br>'
           pl.bindPopup(
             `Scenario: SSP${scenario}<br>` +
             `Year: ${year}<br>` +
             `Percentile: 0.5<br>` +
-            `Mean retreat rate: ${run.meanRate.toFixed(3)} m/yr<br>` +
+            `Projected retreat rate: ${run.meanRate.toFixed(3)} m/yr<br>` +
+            historicLine +
             `Total retreat: ${(run.meanRate * (Number(year) - 2020)).toFixed(2)} m`
           )
         }
