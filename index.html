@@ -23,6 +23,7 @@
     crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js" integrity="sha512-dfX5uYVXzyU8+KHqj8bjo7UkOdg18PaOtpa48djpNbZHwExddghZ+ZmzWT06R5v6NSk3ZUfsH6FNEDepLx9hPQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.min.js"></script>
   <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.3/dist/leaflet.draw.css" />
   <script src="https://unpkg.com/leaflet-draw@1.0.3/dist/leaflet.draw.js"></script>
   <link rel="stylesheet" href="https://prominentedge.com/leaflet-measure-path/leaflet-measure-path.css" />
@@ -88,6 +89,10 @@
 <body>
   <div id="map"></div>
   <script>
+    if (typeof proj4 === 'function' && !proj4.defs('EPSG:2193')) {
+      proj4.defs('EPSG:2193', '+proj=tmerc +lat_0=0 +lon_0=173 +k=0.9996 +x_0=1600000 +y_0=10000000 +ellps=GRS80 +units=m +no_defs')
+    }
+
     var map = L.map('map', {
       center: [-42, 172],
       zoom: 6,
@@ -298,6 +303,23 @@
 
     function rowId(row) {
       return String(row.Unique_ID)
+    }
+
+    function parseValidNzLatLon(latValue, lonValue) {
+      if (latValue === null || latValue === undefined || latValue === '') return null
+      if (lonValue === null || lonValue === undefined || lonValue === '') return null
+      var lat = Number(latValue)
+      var lon = Number(lonValue)
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null
+      // Keep map strictly around NZ to avoid stray 0,0 or malformed points.
+      if (lat < -55 || lat > -25 || lon < 160 || lon > 190) return null
+      return { lat: lat, lon: lon }
+    }
+
+    function shorelineLatLon(row) {
+      // Plot shoreline points from shoreline lat/lon columns.
+      // point_X/point_Y are projected coordinates and need CRS metadata to convert reliably.
+      return parseValidNzLatLon(row.lat, row.lon) || parseValidNzLatLon(row.proj_lat, row.proj_lon)
     }
 
     function historicRetreatRateFromWlr(row) {
@@ -537,17 +559,16 @@
       // Render individual points as circle markers
       var pointsAdded = 0
       rows50.forEach(function(row) {
-        var lat = Number(row.proj_lat)
-        var lon = Number(row.proj_lon)
+        var latLon = shorelineLatLon(row)
         var rate = Number(row.R_SLR_rate)
         var wlr = Number(row.WLR)
         var totalRetreat = rate * (Number(year) - 2020)
         var B = Number(row.B)
         var CD = Number(row.CD)
-        var L = Number(row.L)
+        var profileLength = Number(row.L)
 
-        if (Number.isFinite(lat) && Number.isFinite(lon)) {
-          var marker = L.circleMarker([lat, lon], {
+        if (latLon) {
+          var marker = L.circleMarker([latLon.lat, latLon.lon], {
             radius: 4,
             fillColor: color,
             color: color,
@@ -563,7 +584,7 @@
             `<b>Historic retreat rate:</b> ${Number.isFinite(wlr) ? wlr.toFixed(3) : 'n/a'} m/yr<br>` +
             `<b>Dune height (B):</b> ${Number.isFinite(B) ? B.toFixed(2) : 'n/a'} m<br>` +
             `<b>Closure depth (CD):</b> ${Number.isFinite(CD) ? CD.toFixed(2) : 'n/a'} m<br>` +
-            `<b>Profile length (L):</b> ${Number.isFinite(L) ? L.toFixed(2) : 'n/a'} m`
+            `<b>Profile length (L):</b> ${Number.isFinite(profileLength) ? profileLength.toFixed(2) : 'n/a'} m`
 
           marker.bindPopup(popupContent)
           scenarioLayers[scenario].line.addLayer(marker)
@@ -581,9 +602,15 @@
         if (!activeScenarios.has(s)) clearScenario(s)
       })
       refreshLegend()
-      // Only try to fit bounds if we have actual data
-      var allLineGroups = SCENARIOS.flatMap(s => [scenarioLayers[s].line])
-      var combinedBounds = L.featureGroup(allLineGroups).getBounds()
+      // Build bounds from actual marker layers to avoid LayerGroup getLatLng errors.
+      var combinedBounds = L.latLngBounds()
+      SCENARIOS.forEach(function(s) {
+        scenarioLayers[s].line.eachLayer(function(layer) {
+          if (layer && typeof layer.getLatLng === 'function') {
+            combinedBounds.extend(layer.getLatLng())
+          }
+        })
+      })
       if (combinedBounds.isValid()) {
         map.fitBounds(combinedBounds, { padding: [20, 20] })
       }
