@@ -37,7 +37,7 @@ outputfilename_shp = "bruunrule.shp"
 
 # DSAS rates source for total observed retreat used in Bruun retreat term.
 # This CSV must contain Unique_ID, WLR and Duration.
-with_rates_csv_pattern = "*_with_rates.csv"
+with_rates_csv_patterns = ["*_with_rates.csv.gz", "*_with_rates.csv"]
 
 
 maxdunepeak = 10
@@ -62,14 +62,21 @@ transect_wp = gpd.read_file(
     os.path.join(grandparent_folder, inputloctransect, transect_wp_gpkg)
 )
 
-# Load rates from *_with_rates.csv and merge onto transects by Unique_ID.
-rate_candidates = sorted(glob.glob(os.path.join(script_folder, with_rates_csv_pattern)))
+# Load rates from *_with_rates.csv.gz (preferred) or *_with_rates.csv and merge onto transects by Unique_ID.
+# If multiple files match, pick the most recently modified file.
+rate_candidates = []
+for pattern in with_rates_csv_patterns:
+    candidates = sorted(glob.glob(os.path.join(script_folder, pattern)))
+    if candidates:
+        rate_candidates = candidates
+        break
+
 if not rate_candidates:
     raise FileNotFoundError(
-        f"no with-rates CSV found in {script_folder} matching {with_rates_csv_pattern}"
+        f"no with-rates CSV found in {script_folder} matching any of {with_rates_csv_patterns}"
     )
 
-rates_csv_path = rate_candidates[0]
+rates_csv_path = max(rate_candidates, key=os.path.getmtime)
 rates_df = pd.read_csv(rates_csv_path)
 
 required_rate_cols = ["WLR", "Duration"]
