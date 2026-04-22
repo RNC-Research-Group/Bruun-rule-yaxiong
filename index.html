@@ -87,7 +87,7 @@
 
 <body>
   <div id="map"></div>
-  <script type="module">
+  <script>
     var map = L.map('map', {
       center: [-42, 172],
       zoom: 6,
@@ -199,7 +199,7 @@
     var csvCache = {}
 
     function buildCsvPath(year, scenario, percentile) {
-      return `../output/bruunrule/NZ_medium_confidence_y${year}_s${scenario}_p${percentile}.csv`
+      return `output/bruunrule/NZ_medium_confidence_y${year}_s${scenario}_p${percentile}.csv`
     }
 
     var scenarioControl = L.control({ position: 'topright' });
@@ -529,54 +529,48 @@
     async function renderScenario(year, scenario) {
       clearScenario(scenario)
       var color = SCENARIO_COLORS[scenario]
-      var uncColor = chroma(color).brighten(1.5).css()
+      console.log(`renderScenario: Loading year=${year}, scenario=${scenario}`);
 
       var rows50 = await loadDataset(year, scenario, '0.5')
-      var rows17 = await loadDataset(year, scenario, '0.17')
-      var rows83 = await loadDataset(year, scenario, '0.83')
+      console.log(`renderScenario: Loaded ${rows50.length} rows for y${year}_s${scenario}`);
 
-      var runs50 = buildProjectedRuns(rows50, 'R_SLR_rate')
-      var lookup17 = buildRowLookup(rows17)
-      var lookup83 = buildRowLookup(rows83)
+      // Render individual points as circle markers
+      var pointsAdded = 0
+      rows50.forEach(function(row) {
+        var lat = Number(row.proj_lat)
+        var lon = Number(row.proj_lon)
+        var rate = Number(row.R_SLR_rate)
+        var wlr = Number(row.WLR)
+        var totalRetreat = rate * (Number(year) - 2020)
+        var B = Number(row.B)
+        var CD = Number(row.CD)
+        var L = Number(row.L)
 
-      runs50.forEach(function(run) {
-        var coords17 = coordsFromRunIds(run.ids, lookup17)
-        if (coords17.length >= 2) {
-          scenarioLayers[scenario].uncertainty.addLayer(
-            L.polyline(coords17, { color: uncColor, weight: 2, opacity: 0.6, dashArray: '5,5', lineCap: 'round', lineJoin: 'round' })
-          )
-        }
-        var coords83 = coordsFromRunIds(run.ids, lookup83)
-        if (coords83.length >= 2) {
-          scenarioLayers[scenario].uncertainty.addLayer(
-            L.polyline(coords83, { color: uncColor, weight: 2, opacity: 0.6, dashArray: '5,5', lineCap: 'round', lineJoin: 'round' })
-          )
+        if (Number.isFinite(lat) && Number.isFinite(lon)) {
+          var marker = L.circleMarker([lat, lon], {
+            radius: 4,
+            fillColor: color,
+            color: color,
+            weight: 1,
+            opacity: 0.9,
+            fillOpacity: 0.8
+          })
+
+          var popupContent = `<b>Scenario:</b> SSP${scenario}<br>` +
+            `<b>Year:</b> ${year}<br>` +
+            `<b>Projected retreat rate:</b> ${Number.isFinite(rate) ? rate.toFixed(3) : 'n/a'} m/yr<br>` +
+            `<b>Total retreat:</b> ${Number.isFinite(totalRetreat) ? totalRetreat.toFixed(2) : 'n/a'} m<br>` +
+            `<b>Historic retreat rate:</b> ${Number.isFinite(wlr) ? wlr.toFixed(3) : 'n/a'} m/yr<br>` +
+            `<b>Dune height (B):</b> ${Number.isFinite(B) ? B.toFixed(2) : 'n/a'} m<br>` +
+            `<b>Closure depth (CD):</b> ${Number.isFinite(CD) ? CD.toFixed(2) : 'n/a'} m<br>` +
+            `<b>Profile length (L):</b> ${Number.isFinite(L) ? L.toFixed(2) : 'n/a'} m`
+
+          marker.bindPopup(popupContent)
+          scenarioLayers[scenario].line.addLayer(marker)
+          pointsAdded++
         }
       })
-
-      runs50.forEach(function(run) {
-        var pl = L.polyline(run.coords, {
-          color: color,
-          weight: 3.5,
-          opacity: 0.95,
-          lineCap: 'round',
-          lineJoin: 'round',
-        })
-        if (Number.isFinite(run.meanRate)) {
-          var historicLine = Number.isFinite(run.meanHistoricRetreatRate)
-            ? `Historic retreat rate: ${run.meanHistoricRetreatRate.toFixed(3)} m/yr<br>`
-            : 'Historic retreat rate: n/a<br>'
-          pl.bindPopup(
-            `Scenario: SSP${scenario}<br>` +
-            `Year: ${year}<br>` +
-            `Percentile: 0.5<br>` +
-            `Projected retreat rate: ${run.meanRate.toFixed(3)} m/yr<br>` +
-            historicLine +
-            `Total retreat: ${(run.meanRate * (Number(year) - 2020)).toFixed(2)} m`
-          )
-        }
-        scenarioLayers[scenario].line.addLayer(pl)
-      })
+      console.log(`renderScenario: Added ${pointsAdded} points for y${year}_s${scenario}`);
     }
 
     async function renderAllActiveScenarios() {
@@ -587,8 +581,9 @@
         if (!activeScenarios.has(s)) clearScenario(s)
       })
       refreshLegend()
-      var allGroups = SCENARIOS.flatMap(s => [scenarioLayers[s].line, scenarioLayers[s].uncertainty])
-      var combinedBounds = L.featureGroup(allGroups).getBounds()
+      // Only try to fit bounds if we have actual data
+      var allLineGroups = SCENARIOS.flatMap(s => [scenarioLayers[s].line])
+      var combinedBounds = L.featureGroup(allLineGroups).getBounds()
       if (combinedBounds.isValid()) {
         map.fitBounds(combinedBounds, { padding: [20, 20] })
       }
@@ -597,15 +592,19 @@
     // Load selected Step 5 CSV and initialize map
     async function loadDataAndInitializeMap() {
       try {
+        console.log('Starting to load data...');
         await renderAllActiveScenarios()
+        console.log('Data loaded successfully');
         map.spin(false);
       } catch (error) {
         console.error('Failed to load data:', error);
+        alert('Error loading data: ' + error.message);
         map.spin(false);
       }
     }
 
     // Start loading data
+    console.log('Initializing map...');
     loadDataAndInitializeMap();
 
     var geoSearch = new GeoSearch.GeoSearchControl({
