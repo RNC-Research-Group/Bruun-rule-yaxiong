@@ -97,11 +97,15 @@ for year in years:
 
             cols_for_map = [
                 "Unique_ID",
+                "WLR",
+                "Duration",
+                "historic_retreat_obs_m",
                 "dist_m",
                 "mean_dist_to_coast",
                 "CD",
                 "B",
                 "L",
+                "R_bruun",
                 "R",
                 "tanbeta",
                 "Site ID",

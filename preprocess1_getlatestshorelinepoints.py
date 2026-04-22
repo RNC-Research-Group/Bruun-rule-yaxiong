@@ -21,7 +21,7 @@ os.makedirs(os.path.join(grandparent_folder, outputloc), exist_ok=True)
 
 # input
 crsused = 2193
-input_csv = os.path.join(os.path.dirname(current_script), "slpoints_rates.csv")
+input_csv = os.path.join(os.path.dirname(current_script), "slpoints_rates.csv.gz")
 
 required_cols = [
     "Distance",
