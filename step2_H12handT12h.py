@@ -136,7 +136,7 @@ for i in tqdm(range(n_points)):
     Fp12h = df_point_sorted.loc[rank_index, "Fp"]
     Tp12h = np.nan if np.isnan(Fp12h) or Fp12h == 0 else 1.0 / Fp12h
     Tmean = np.mean([T0112h, T0212h, T0m112h, Tp12h])
-    CD = 2.28 * Hs12h - 68.5 * Hs12h**2 / (g * Tmean**2)
+    CD = 1.75 * Hs12h - 57.9 * Hs12h**2 / (g * Tmean**2)  # Birkemeier (1985)
 
     df_sum = pd.DataFrame(
         [
