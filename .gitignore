@@ -1,0 +1,9 @@
+output/bruunrule/*.gpkg
+output/bruunrule/*.dbf
+output/bruunrule/*.shp
+output/bruunrule/*.shx
+output/bruunrule/*.prj
+output/bruunrule/*.cpg
+nzccd_rates_proxy.geojson
+__pycache__/
+*.pyc

@@ -1,0 +1,471 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SSP4.5 2100 50th Percentile: Equation Comparison</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <style>
+    html, body, #map {
+      height: 100%;
+      margin: 0;
+    }
+    .panel {
+      background: rgba(0, 0, 0, 0.82);
+      color: #fff;
+      padding: 10px;
+      border-radius: 6px;
+      min-width: 280px;
+      font: 13px/1.4 sans-serif;
+    }
+    .swatch {
+      display: inline-block;
+      width: 18px;
+      margin-right: 6px;
+      vertical-align: middle;
+      border-top: 3px solid;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script>
+    var map = L.map("map", { center: [-42, 172], zoom: 6 });
+    L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      { attribution: "Tiles &copy; Esri" }
+    ).addTo(map);
+
+    var scenarioLabel = "SSP4.5";
+    var yearLabel = "2100";
+    var percentileLabel = "0.5";
+    var regionPath = "nzccd-coastal-change-rates.csv";
+
+    // Main equation outputs plus birk_toe overlay for comparison.
+    var datasets = [
+      {
+        key: "hallermeier_inner",
+        label: "Hallermeier Inner (hallin)",
+        path: "output/birkemeier_latest/NZ_medium_confidence_y2100_s4.5_p0.5_hallin.csv",
+        style: {
+          color: "#ff7f0e",
+          weight: 4.6,
+          opacity: 1.0,
+          lineCap: "round",
+          lineJoin: "round"
+        }
+      },
+      {
+        key: "hallermeier_outer",
+        label: "Hallermeier Outer (hallout)",
+        path: "output/birkemeier_latest/NZ_medium_confidence_y2100_s4.5_p0.5_hallout.csv",
+        style: {
+          color: "#2ca02c",
+          weight: 4.6,
+          opacity: 1.0,
+          lineCap: "round",
+          lineJoin: "round"
+        }
+      },
+      {
+        key: "birkemeier_1985",
+        label: "Birkemeier 1985 (birk)",
+        path: "output/birkemeier_latest/NZ_medium_confidence_y2100_s4.5_p0.5_birk.csv",
+        style: {
+          color: "#1f77b4",
+          weight: 4.6,
+          opacity: 1.0,
+          lineCap: "round",
+          lineJoin: "round"
+        }
+      },
+      {
+        key: "birkemeier_toe",
+        label: "Birkemeier Toe (birk_toe)",
+        path: "output/birkemeier_latest/NZ_medium_confidence_y2100_s4.5_p0.5_birk_toe.csv",
+        style: {
+          color: "#9467bd",
+          weight: 4.6,
+          opacity: 1.0,
+          lineCap: "round",
+          lineJoin: "round"
+        }
+      }
+    ];
+
+    var layerByKey = {};
+    datasets.forEach(function(ds) {
+      layerByKey[ds.key] = L.layerGroup().addTo(map);
+    });
+
+    function parseCSV(url) {
+      return new Promise(function(resolve, reject) {
+        Papa.parse(url, {
+          header: true,
+          download: true,
+          dynamicTyping: true,
+          skipEmptyLines: true,
+          complete: function(results) { resolve(results.data); },
+          error: function(err) { reject(err); }
+        });
+      });
+    }
+
+    function normalizeId(value) {
+      if (value === null || value === undefined) return "";
+      var n = Number(value);
+      if (Number.isFinite(n)) return String(Math.trunc(n));
+      return String(value).trim();
+    }
+
+    function buildRegionLookup(rows) {
+      var lookup = new Map();
+      for (var i = 0; i < rows.length; i++) {
+        var key = normalizeId(rows[i].UniqueID);
+        if (!key) continue;
+        var region = rows[i].Region;
+        if (region === null || region === undefined || String(region).trim() === "") continue;
+        if (!lookup.has(key)) lookup.set(key, String(region));
+      }
+      return lookup;
+    }
+
+    function asFinite(value) {
+      if (value === null || value === undefined) return NaN;
+      if (typeof value === "string" && value.trim() === "") return NaN;
+      var n = Number(value);
+      return Number.isFinite(n) ? n : NaN;
+    }
+
+    function isLikelyNzLatLon(lat, lon) {
+      // Guard against accidental (0,0) or other out-of-domain coordinates.
+      return Number.isFinite(lat) && Number.isFinite(lon) &&
+             lat >= -50 && lat <= -30 &&
+             lon >= 160 && lon <= 180;
+    }
+
+    function fillProjectedFallbackFromWave(rows) {
+      var filled = 0;
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        if (Number.isFinite(asFinite(r.proj_lat)) && Number.isFinite(asFinite(r.proj_lon))) {
+          continue;
+        }
+        var lat0 = asFinite(r.lat);
+        var lon0 = asFinite(r.lon);
+        var latW = asFinite(r.wave_lat);
+        var lonW = asFinite(r.wave_lon);
+        var retreatM = asFinite(r.R_SLR);
+        if (!Number.isFinite(lat0) || !Number.isFinite(lon0) ||
+            !Number.isFinite(latW) || !Number.isFinite(lonW) ||
+            !Number.isFinite(retreatM)) {
+          continue;
+        }
+
+        var cosLat = Math.cos(lat0 * Math.PI / 180);
+        if (!Number.isFinite(cosLat) || Math.abs(cosLat) < 1e-9) continue;
+
+        var dE = (lonW - lon0) * 111320 * cosLat;
+        var dN = (latW - lat0) * 111320;
+        var norm = Math.hypot(dE, dN);
+        if (!Number.isFinite(norm) || norm <= 0) continue;
+
+        // Move projected point landward by retreat distance along transect direction.
+        var uE = dE / norm;
+        var uN = dN / norm;
+        var shiftE = -retreatM * uE;
+        var shiftN = -retreatM * uN;
+
+        var lat1 = lat0 + shiftN / 111320;
+        var lon1 = lon0 + shiftE / (111320 * cosLat);
+        if (isLikelyNzLatLon(lat1, lon1)) {
+          r.proj_lat = lat1;
+          r.proj_lon = lon1;
+          filled += 1;
+        }
+      }
+      return filled;
+    }
+
+    function buildProjectedRuns(rows) {
+      // Transects are 10 m apart: do not connect if spacing is larger than this.
+      var adjacentJoinMaxDistM = 10.0;
+      var cellSize = adjacentJoinMaxDistM;
+      // Single-next linking: each point proposes only one nearest neighbor.
+      // This reduces zig-zag/bouncing and avoids multi-spot joins.
+      var maxNearest = 1;
+
+      var validRows = rows.filter(function(r) {
+        var pLat = asFinite(r.proj_lat);
+        var pLon = asFinite(r.proj_lon);
+        return isLikelyNzLatLon(pLat, pLon) &&
+               Number.isFinite(asFinite(r.point_X)) &&
+               Number.isFinite(asFinite(r.point_Y));
+      });
+      if (!validRows.length) return [];
+
+      function key(ix, iy) { return ix + "|" + iy; }
+      var buckets = new Map();
+
+      for (var i = 0; i < validRows.length; i++) {
+        var x = asFinite(validRows[i].point_X);
+        var y = asFinite(validRows[i].point_Y);
+        var ix = Math.floor(x / cellSize);
+        var iy = Math.floor(y / cellSize);
+        var k = key(ix, iy);
+        if (!buckets.has(k)) buckets.set(k, []);
+        buckets.get(k).push(i);
+      }
+
+      var nearest = Array.from({ length: validRows.length }, function() { return []; });
+      for (var i = 0; i < validRows.length; i++) {
+        var xi = asFinite(validRows[i].point_X);
+        var yi = asFinite(validRows[i].point_Y);
+        var iix = Math.floor(xi / cellSize);
+        var iiy = Math.floor(yi / cellSize);
+        var candidates = [];
+
+        for (var dx = -1; dx <= 1; dx++) {
+          for (var dy = -1; dy <= 1; dy++) {
+            var arr = buckets.get(key(iix + dx, iiy + dy)) || [];
+            for (var a = 0; a < arr.length; a++) {
+              var j = arr[a];
+              if (j === i) continue;
+              var xj = asFinite(validRows[j].point_X);
+              var yj = asFinite(validRows[j].point_Y);
+              var d = Math.hypot(xi - xj, yi - yj);
+              if (!Number.isFinite(d) || d <= 0 || d > adjacentJoinMaxDistM) continue;
+              candidates.push({ j: j, d: d });
+            }
+          }
+        }
+
+        candidates.sort(function(a, b) { return a.d - b.d; });
+        nearest[i] = candidates.slice(0, maxNearest);
+      }
+
+      // Reciprocal nearest-neighbor linking only.
+      // This avoids forks/branching where one point connects to multiple nearby points.
+      var nearestIdx = new Array(validRows.length).fill(-1);
+      var nearestDist = new Array(validRows.length).fill(Number.POSITIVE_INFINITY);
+      for (var i = 0; i < validRows.length; i++) {
+        if (nearest[i].length > 0) {
+          nearestIdx[i] = nearest[i][0].j;
+          nearestDist[i] = nearest[i][0].d;
+        }
+      }
+
+      var edges = [];
+      for (var i = 0; i < validRows.length; i++) {
+        var j = nearestIdx[i];
+        if (j < 0 || j <= i) continue;
+        if (nearestIdx[j] !== i) continue;
+        edges.push({ i: i, j: j, d: Math.min(nearestDist[i], nearestDist[j]) });
+      }
+      edges.sort(function(a, b) { return a.d - b.d; });
+
+      var adjacency = Array.from({ length: validRows.length }, function() { return new Set(); });
+      var degree = new Array(validRows.length).fill(0);
+      for (var e = 0; e < edges.length; e++) {
+        var edge = edges[e];
+        if (degree[edge.i] >= 2 || degree[edge.j] >= 2) continue;
+        adjacency[edge.i].add(edge.j);
+        adjacency[edge.j].add(edge.i);
+        degree[edge.i] += 1;
+        degree[edge.j] += 1;
+      }
+
+      var visited = new Array(validRows.length).fill(false);
+      var runs = [];
+
+      for (var i = 0; i < validRows.length; i++) {
+        if (visited[i] || adjacency[i].size === 0) continue;
+
+        var stack = [i];
+        visited[i] = true;
+        var component = [];
+
+        while (stack.length) {
+          var n = stack.pop();
+          component.push(n);
+          adjacency[n].forEach(function(nb) {
+            if (!visited[nb]) {
+              visited[nb] = true;
+              stack.push(nb);
+            }
+          });
+        }
+
+        if (component.length < 2) continue;
+        var componentSet = new Set(component);
+        var endpoints = component.filter(function(idx) {
+          var deg = 0;
+          adjacency[idx].forEach(function(nb) {
+            if (componentSet.has(nb)) deg += 1;
+          });
+          return deg === 1;
+        });
+
+        var start = endpoints.length ? endpoints[0] : component[0];
+        var ordered = [];
+        var used = new Set();
+        var prev = null;
+        var cur = start;
+
+        while (cur !== null && !used.has(cur)) {
+          ordered.push(cur);
+          used.add(cur);
+          var next = null;
+          var nbs = [];
+          adjacency[cur].forEach(function(nb) {
+            if (componentSet.has(nb) && !used.has(nb)) nbs.push(nb);
+          });
+          if (nbs.length === 1) next = nbs[0];
+          else if (nbs.length > 1) {
+            next = prev !== null ? (nbs.find(function(nb) { return nb !== prev; }) || nbs[0]) : nbs[0];
+          }
+          prev = cur;
+          cur = next;
+        }
+
+        if (ordered.length < 2) continue;
+        var points = [];
+        for (var p = 0; p < ordered.length; p++) {
+          var row = validRows[ordered[p]];
+          points.push({
+            lat: asFinite(row.proj_lat),
+            lon: asFinite(row.proj_lon),
+            row: row
+          });
+        }
+        runs.push(points);
+      }
+
+      return runs;
+    }
+
+    function formatNumber(value, digits) {
+      var n = asFinite(value);
+      if (!Number.isFinite(n)) return "n/a";
+      return n.toFixed(digits);
+    }
+
+    function getNearestRunPoint(clickLatLng, runPoints, mapObj) {
+      var best = null;
+      var bestDist = Number.POSITIVE_INFINITY;
+      for (var i = 0; i < runPoints.length; i++) {
+        var p = runPoints[i];
+        var d = mapObj.distance(clickLatLng, L.latLng(p.lat, p.lon));
+        if (d < bestDist) {
+          bestDist = d;
+          best = p;
+        }
+      }
+      return best;
+    }
+
+    function buildPopupHtml(equationLabel, row, regionLookup) {
+      var uid = normalizeId(row.Unique_ID);
+      var region = regionLookup.get(uid) || "n/a";
+      return (
+        "<div style=\"min-width:230px\">" +
+          "<div><b>Equation:</b> " + equationLabel + "</div>" +
+          "<div><b>Unique ID:</b> " + (uid || "n/a") + "</div>" +
+          "<div><b>Region:</b> " + region + "</div>" +
+          "<div><b>Closure Depth:</b> " + formatNumber(row.CD, 3) + " m</div>" +
+          "<div><b>Profile Length:</b> " + formatNumber(row.L, 3) + " m</div>" +
+          "<div><b>Historic Retreat Rate:</b> " + formatNumber(row.WLR, 3) + " m/yr</div>" +
+          "<div><b>Projected Retreat Rate:</b> " + formatNumber(row.R_SLR_rate, 3) + " m/yr</div>" +
+          "<div><b>Projected Total Retreat:</b> " + formatNumber(row.R_SLR, 3) + " m</div>" +
+        "</div>"
+      );
+    }
+
+    function drawRuns(layer, runs, style, equationLabel, regionLookup) {
+      for (var i = 0; i < runs.length; i++) {
+        var runPoints = runs[i];
+        var coords = runPoints.map(function(p) { return [p.lat, p.lon]; });
+        var line = L.polyline(coords, style).addTo(layer);
+        line._runPoints = runPoints;
+        line.on("click", function(e) {
+          var nearest = getNearestRunPoint(e.latlng, this._runPoints, map);
+          if (!nearest || !nearest.row) return;
+          this.bindPopup(buildPopupHtml(equationLabel, nearest.row, regionLookup)).openPopup(e.latlng);
+        });
+      }
+    }
+
+    var info = L.control({ position: "topright" });
+    info.onAdd = function() {
+      var div = L.DomUtil.create("div", "panel");
+      div.id = "info-panel";
+      div.innerHTML = "Loading equation datasets...";
+      return div;
+    };
+    info.addTo(map);
+
+    Promise.all([
+      Promise.all(datasets.map(function(ds) { return parseCSV(ds.path); })),
+      parseCSV(regionPath)
+    ])
+      .then(function(allResults) {
+        var resultSets = allResults[0];
+        var regionRows = allResults[1];
+        var regionLookup = buildRegionLookup(regionRows);
+        var summary = [];
+        var bounds = L.latLngBounds();
+
+        for (var i = 0; i < datasets.length; i++) {
+          var ds = datasets[i];
+          var rows = resultSets[i];
+          var fallbackFilled = fillProjectedFallbackFromWave(rows);
+          var runs = buildProjectedRuns(rows);
+          drawRuns(layerByKey[ds.key], runs, ds.style, ds.label, regionLookup);
+
+          layerByKey[ds.key].eachLayer(function(layer) {
+            bounds.extend(layer.getBounds());
+          });
+
+          summary.push({
+            label: ds.label,
+            rows: rows.length,
+            runs: runs.length,
+            filled: fallbackFilled,
+            color: ds.style.color,
+            dashed: !!ds.style.dashArray
+          });
+        }
+
+        if (bounds.isValid()) map.fitBounds(bounds.pad(0.05));
+
+        var panel = document.getElementById("info-panel");
+        var html = "";
+        html += "<div><b>Scenario:</b> " + scenarioLabel + "</div>";
+        html += "<div><b>Year:</b> " + yearLabel + "</div>";
+        html += "<div><b>Percentile:</b> " + percentileLabel + "</div>";
+        html += "<div style=\"margin-top:6px;font-size:12px;opacity:.9;\">Projected locations shown as connected lines.</div>";
+        html += "<div style=\"font-size:12px;opacity:.9;\">Connection limit between adjacent transects: 10 m.</div>";
+
+        for (var k = 0; k < summary.length; k++) {
+          var s = summary[k];
+          html += "<div style=\"margin-top:6px;\"><span class=\"swatch\" style=\"border-color:" + s.color + ";" + (s.dashed ? "border-top-style:dashed;" : "") + "\"></span>" + s.label + "</div>";
+          html += "<div style=\"font-size:12px;opacity:.9;padding-left:24px;\">rows: " + s.rows + ", runs: " + s.runs + ", fallback filled: " + s.filled + "</div>";
+        }
+        panel.innerHTML = html;
+
+        var overlays = {};
+        for (var n = 0; n < datasets.length; n++) {
+          overlays[datasets[n].label] = layerByKey[datasets[n].key];
+        }
+        L.control.layers({}, overlays, { position: "topleft" }).addTo(map);
+      })
+      .catch(function(err) {
+        var panel = document.getElementById("info-panel");
+        panel.innerHTML = "<b>Failed to load equation files.</b><br>" + String(err);
+        console.error(err);
+      });
+  </script>
+</body>
+</html>

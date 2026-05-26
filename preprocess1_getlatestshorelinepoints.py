@@ -65,6 +65,7 @@ outputfile_path_points_gpkg = os.path.join(
 outputfile_path_points_shp = os.path.join(
     grandparent_folder, outputloc, "latestuniquepoints_merged.shp"
 )
+rates_proxy_parquet = os.path.join(os.path.dirname(current_script), "nzccd_rates_proxy.parquet")
 
 
 def calc_transect_unit_vector(group):
@@ -134,6 +135,91 @@ lastestuniquepoints = lastestuniquepoints[keep_cols].copy()
 
 ## save data
 lastestuniquepoints.to_file(outputfile_path_points_gpkg, driver="GPKG")
+
+# Append latest shoreline XY/date to nzccd_rates_proxy.parquet so downstream
+# processing can use a single rates-proxy dataset.
+if os.path.exists(rates_proxy_parquet):
+    proxy_gdf = gpd.read_parquet(rates_proxy_parquet)
+    proxy_id_col = None
+    for col in ["UniqueID", "Unique_ID"]:
+        if col in proxy_gdf.columns:
+            proxy_id_col = col
+            break
+    if proxy_id_col is None:
+        raise KeyError(
+            f"expected UniqueID/Unique_ID in {rates_proxy_parquet}, found: {list(proxy_gdf.columns)}"
+        )
+
+    # Normalize both ID columns to the same integer-string key so
+    # Unique_ID and UniqueID represent the same transect identifier.
+    latest_join = lastestuniquepoints[["Unique_ID", "IntersectX", "IntersectY", "Date"]].copy()
+    latest_join["Unique_ID_norm"] = pd.to_numeric(
+        latest_join["Unique_ID"], errors="coerce"
+    ).astype("Int64")
+    latest_join = latest_join.rename(columns={"Date": "latest_shoreline_date"})
+    latest_join = latest_join.dropna(subset=["Unique_ID_norm"])
+    latest_join["Unique_ID_norm"] = latest_join["Unique_ID_norm"].astype(str)
+    latest_join = latest_join.drop(columns=["Unique_ID"])
+
+    latest_dup = latest_join["Unique_ID_norm"].duplicated(keep=False)
+    if latest_dup.any():
+        sample_ids = latest_join.loc[latest_dup, "Unique_ID_norm"].head(10).tolist()
+        raise ValueError(
+            "latest shoreline IDs are not unique; one-to-one join not possible. "
+            f"Example duplicate IDs: {sample_ids}"
+        )
+
+    proxy_gdf["Unique_ID_norm"] = pd.to_numeric(
+        proxy_gdf[proxy_id_col], errors="coerce"
+    ).astype("Int64")
+    proxy_gdf = proxy_gdf.dropna(subset=["Unique_ID_norm"]).copy()
+    proxy_gdf["Unique_ID_norm"] = proxy_gdf["Unique_ID_norm"].astype(str)
+
+    proxy_dup = proxy_gdf["Unique_ID_norm"].duplicated(keep=False)
+    if proxy_dup.any():
+        sample_ids = proxy_gdf.loc[proxy_dup, "Unique_ID_norm"].head(10).tolist()
+        raise ValueError(
+            "rates proxy IDs are not unique; one-to-one join not possible. "
+            f"Example duplicate IDs: {sample_ids}"
+        )
+
+    latest_ids = set(latest_join["Unique_ID_norm"])
+    proxy_ids = set(proxy_gdf["Unique_ID_norm"])
+    missing_in_latest = sorted(list(proxy_ids - latest_ids))
+    missing_in_proxy = sorted(list(latest_ids - proxy_ids))
+    if missing_in_proxy:
+        print(
+            "WARNING: latest shoreline contains IDs not present in proxy: "
+            f"{len(missing_in_proxy)}"
+        )
+
+    proxy_gdf = proxy_gdf.drop(
+        columns=["IntersectX", "IntersectY", "latest_shoreline_date"], errors="ignore"
+    )
+    n_proxy_before = len(proxy_gdf)
+    proxy_gdf = proxy_gdf.merge(
+        latest_join,
+        on="Unique_ID_norm",
+        how="inner",
+        validate="one_to_one",
+    )
+    dropped_no_latest = n_proxy_before - len(proxy_gdf)
+    if dropped_no_latest > 0:
+        print(
+            "Dropped proxy rows without latest shoreline match: "
+            f"{dropped_no_latest}/{n_proxy_before}"
+        )
+
+    proxy_gdf = proxy_gdf.drop(columns=["Unique_ID_norm"])
+    proxy_gdf.to_parquet(rates_proxy_parquet, index=False)
+
+    matched_xy = int(proxy_gdf["IntersectX"].notna().sum())
+    print(
+        "Updated nzccd_rates_proxy.parquet with latest shoreline XY/date: "
+        f"{matched_xy}/{len(proxy_gdf)} rows matched by UniqueID"
+    )
+else:
+    print(f"WARNING: rates proxy parquet not found: {rates_proxy_parquet}")
 
 lastestuniquepoints["Unique_ID"] = lastestuniquepoints["Unique_ID"].apply(
     lambda x: str(int(x)) if pd.notna(x) else ""
