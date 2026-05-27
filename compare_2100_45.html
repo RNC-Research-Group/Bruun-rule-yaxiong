@@ -35,7 +35,7 @@
     }).addTo(map);
 
     var aprilPath = 'output/bruunrule/NZ_medium_confidence_y2100_s4.5_p0.5.csv';
-    var birkPath = 'output/doc_eq/NZ_medium_confidence_y2100_s4.5_p0.5_birk_toe.csv';
+    var birkPath = 'output/doc_eq/NZ_medium_confidence_y2100_s4.5_p0.5_birk.csv';
 
     var aprilLayer = L.layerGroup().addTo(map);
     var birkLayer = L.layerGroup().addTo(map);
@@ -291,14 +291,14 @@
         '<div><b>Scenario:</b> SSP4.5</div>' +
         '<div><b>Year:</b> 2100</div>' +
         '<div style="margin-top:6px;"><span class="swatch" style="border-color:#f4a736"></span>April (Hallermeier-era)</div>' +
-        '<div><span class="swatch" style="border-color:#2b6cb0;border-top-style:dashed"></span>May11 Birkemeier (_birk_toe)</div>' +
+        '<div><span class="swatch" style="border-color:#2b6cb0;border-top-style:dashed"></span>May11 Birkemeier (_birk)</div>' +
         '<div style="margin-top:6px;font-size:12px;opacity:.9;">April rows: ' + aprilRows.length + ', runs: ' + aprilRuns.length + '</div>' +
         '<div style="font-size:12px;opacity:.9;">Birk rows: ' + birkRows.length + ', runs: ' + birkRuns.length + '</div>' +
         '<div style="font-size:12px;opacity:.9;">Birk fallback projected coords filled: ' + birkFilled + '</div>';
 
       L.control.layers({}, {
         'April (Hallermeier-era)': aprilLayer,
-        'May11 Birkemeier (_birk_toe)': birkLayer
+        'May11 Birkemeier (_birk)': birkLayer
       }, { position: 'topleft' }).addTo(map);
     }).catch(function(err) {
       var panel = document.getElementById('info-panel');

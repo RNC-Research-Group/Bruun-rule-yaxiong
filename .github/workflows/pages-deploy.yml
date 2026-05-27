@@ -31,10 +31,14 @@ jobs:
           cp compare_2100_45_three_equations.html public/
           cp nzccd-coastal-change-rates.csv public/
 
-          cp output/doc_eq/NZ_medium_confidence_y2100_s4.5_p0.17_birk_toe.csv public/output/doc_eq/
-          cp output/doc_eq/NZ_medium_confidence_y2100_s4.5_p0.5_birk_toe.csv public/output/doc_eq/
-          cp output/doc_eq/NZ_medium_confidence_y2100_s4.5_p0.83_birk_toe.csv public/output/doc_eq/
+          # Main map requirements: hallin for 2050/2100 across all SSPs at p0.5
+          for year in 2050 2100; do
+            for scenario in 1.9 2.6 4.5 7.0 8.5; do
+              cp "output/doc_eq/NZ_medium_confidence_y${year}_s${scenario}_p0.5_hallin.csv" public/output/doc_eq/
+            done
+          done
 
+          # Comparison map requirements: 2100 / SSP4.5 for hallin, hallout, birk.
           cp output/doc_eq/NZ_medium_confidence_y2100_s4.5_p0.5_hallin.csv public/output/doc_eq/
           cp output/doc_eq/NZ_medium_confidence_y2100_s4.5_p0.5_hallout.csv public/output/doc_eq/
           cp output/doc_eq/NZ_medium_confidence_y2100_s4.5_p0.5_birk.csv public/output/doc_eq/
