@@ -183,15 +183,12 @@
 
     var SCENARIOS = ['1.9', '2.6', '4.5', '7.0', '8.5']
     var DATASET_PATHS = {
-      april_hallermeier: 'output/bruunrule',
-      may11_birkemeier: 'output/doc_eq'
+      hall_inner: 'output/doc_eq'
     }
     var DATASET_LABELS = {
-      april_hallermeier: 'April outputs (Hallermeier-era)',
-      may11_birkemeier: 'May 11 outputs (Birkemeier)',
-      compare: 'Compare both outputs'
+      hall_inner: 'Bruun Hall Inner (MHWS location, hallin)',
     }
-    var activeDataset = 'may11_birkemeier'
+    var activeDataset = 'hall_inner'
     var SCENARIO_COLORS = {
       '1.9': '#1b7837',
       '2.6': '#4dac26',
@@ -199,7 +196,7 @@
       '7.0': '#e08214',
       '8.5': '#b2182b'
     }
-    var activeScenarios = new Set(['4.5'])
+    var activeScenarios = new Set(SCENARIOS)
     var activeYear = '2100'
     var joinThresholdM = 10
     var adjacentJoinMaxDistM = 35
@@ -207,11 +204,9 @@
     var scenarioLayers = {}
     SCENARIOS.forEach(function(s) {
       scenarioLayers[s] = {
-        line: L.layerGroup().addTo(map),
-        uncertainty: L.layerGroup().addTo(map)
+        line: L.layerGroup().addTo(map)
       }
       layerControl.addOverlay(scenarioLayers[s].line, 'Scenario ' + s + ' shoreline (p0.5)')
-      layerControl.addOverlay(scenarioLayers[s].uncertainty, 'Scenario ' + s + ' uncertainty (p0.17/p0.83)')
     })
     // Avoid retaining multiple massive CSV datasets in memory.
     // Re-load on demand instead of caching full parsed tables.
@@ -219,8 +214,8 @@
     var csvCache = {}
 
     function buildCsvPath(year, scenario, percentile, datasetKey) {
-      var datasetBase = DATASET_PATHS[datasetKey] || DATASET_PATHS.april_hallermeier
-      var suffix = datasetKey === 'may11_birkemeier' ? '_birk_toe' : ''
+      var datasetBase = DATASET_PATHS[datasetKey] || DATASET_PATHS.hall_inner
+      var suffix = '_hallin'
       return `${datasetBase}/NZ_medium_confidence_y${year}_s${scenario}_p${percentile}${suffix}.csv`
     }
 
@@ -229,32 +224,21 @@
       var div = L.DomUtil.create('div', 'scenario-control');
       var checkboxesHtml = SCENARIOS.map(s => `
         <label style="display:flex;align-items:center;gap:6px;margin-bottom:4px;font-weight:normal;">
-          <input type="checkbox" class="scenario-cb" value="${s}" ${s === '4.5' ? 'checked' : ''}>
+          <input type="checkbox" class="scenario-cb" value="${s}" checked>
           <span style="display:inline-block;width:14px;height:3px;background:${SCENARIO_COLORS[s]};border-radius:2px;"></span>
           SSP${s}
         </label>`).join('');
       div.innerHTML = `
-        <label for="dataset-select">Data source</label>
-        <select id="dataset-select">
-          <option value="compare">Compare both outputs</option>
-          <option value="april_hallermeier">April outputs (Hallermeier-era)</option>
-          <option value="may11_birkemeier" selected>May 11 outputs (Birkemeier)</option>
-        </select>
+        <label style="display:block;margin-bottom:6px;">Data source: Bruun Hall Inner (MHWS location, hallin)</label>
         <label for="year-select">Year</label>
         <select id="year-select">
           <option value="2050">2050</option>
           <option value="2100" selected>2100</option>
-          <option value="2150">2150</option>
         </select>
         <label style="margin-top:10px;display:block;">Scenarios</label>
         ${checkboxesHtml}
       `;
       L.DomEvent.disableClickPropagation(div);
-      L.DomEvent.on(div.querySelector('#dataset-select'), 'change', function (e) {
-        activeDataset = e.target.value;
-        csvCache = {};
-        renderAllActiveScenarios().catch(function(err) { console.error('render error:', err); });
-      });
       L.DomEvent.on(div.querySelector('#year-select'), 'change', function (e) {
         activeYear = e.target.value;
         renderAllActiveScenarios().catch(function(err) { console.error('render error:', err); });
@@ -321,7 +305,6 @@
           + `<i style="background:${SCENARIO_COLORS[s]};height:3px;width:18px;display:inline-block;border-radius:2px;"></i>`
           + `SSP${s}</div>`;
       });
-      legendDiv.innerHTML += '<div style="margin-top:8px;"><span style="display:inline-block;width:16px;border-top:2px dashed #5DADE2;vertical-align:middle;margin-right:6px;"></span>Uncertainty (p0.17/p0.83)</div>';
     }
 
     function quantile(sortedValues, q) {
@@ -586,7 +569,6 @@
 
     function clearScenario(scenario) {
       scenarioLayers[scenario].line.clearLayers()
-      scenarioLayers[scenario].uncertainty.clearLayers()
     }
 
     function nextFrame() {
@@ -610,25 +592,13 @@
       var color = SCENARIO_COLORS[scenario]
       console.log(`renderScenario: Loading year=${year}, scenario=${scenario}`);
 
-      var datasetKeys = activeDataset === 'compare'
-        ? ['april_hallermeier', 'may11_birkemeier']
-        : [activeDataset]
+      var datasetKeys = [activeDataset]
 
       var datasetStyles = {
-        april_hallermeier: {
+        hall_inner: {
           color: color,
           weight: 3,
           opacity: 0.95,
-          lineCap: 'round',
-          lineJoin: 'round',
-          smoothFactor: 1.5,
-          renderer: L.canvas()
-        },
-        may11_birkemeier: {
-          color: '#2b6cb0',
-          weight: 2.5,
-          opacity: 0.95,
-          dashArray: '8,6',
           lineCap: 'round',
           lineJoin: 'round',
           smoothFactor: 1.5,
@@ -697,11 +667,6 @@
           if (layer && typeof layer.getLatLng === 'function') {
             combinedBounds.extend(layer.getLatLng())
           } else if (layer && typeof layer.getBounds === 'function') {
-            combinedBounds.extend(layer.getBounds())
-          }
-        })
-        scenarioLayers[s].uncertainty.eachLayer(function(layer) {
-          if (layer && typeof layer.getBounds === 'function') {
             combinedBounds.extend(layer.getBounds())
           }
         })
