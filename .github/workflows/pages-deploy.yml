@@ -1,0 +1,58 @@
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare lightweight site artifact
+        run: |
+          set -euo pipefail
+          mkdir -p public/output/doc_eq
+
+          cp index.html public/
+          cp compare_2100_45.html public/
+          cp compare_2100_45_three_equations.html public/
+          cp nzccd-coastal-change-rates.csv public/
+
+          cp output/doc_eq/NZ_medium_confidence_y2100_s4.5_p0.17_birk_toe.csv public/output/doc_eq/
+          cp output/doc_eq/NZ_medium_confidence_y2100_s4.5_p0.5_birk_toe.csv public/output/doc_eq/
+          cp output/doc_eq/NZ_medium_confidence_y2100_s4.5_p0.83_birk_toe.csv public/output/doc_eq/
+
+          cp output/doc_eq/NZ_medium_confidence_y2100_s4.5_p0.5_hallin.csv public/output/doc_eq/
+          cp output/doc_eq/NZ_medium_confidence_y2100_s4.5_p0.5_hallout.csv public/output/doc_eq/
+          cp output/doc_eq/NZ_medium_confidence_y2100_s4.5_p0.5_birk.csv public/output/doc_eq/
+
+          touch public/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
