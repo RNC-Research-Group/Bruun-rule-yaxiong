@@ -12,6 +12,13 @@ import numpy as np
 import xarray as xr
 import geopandas as gpd
 from tqdm.auto import tqdm
+from depthofclosure_settings import (
+    CD_METHOD,
+    GRAVITY,
+    D50_M,
+    CD_METHOD_COEFFICIENTS,
+    CD_METHOD_SUFFIX,
+)
 
 # input
 inputloc = r"input/wavedata"
@@ -28,15 +35,43 @@ grandparent_folder = os.path.dirname(os.path.dirname(current_script))
 mindate = pd.to_datetime("1979-01-01 00:00:00")
 maxdate = pd.to_datetime("2024-01-01 00:00:00")
 
+_cd_suffix = CD_METHOD_SUFFIX[CD_METHOD]
 outputfile_gpkg = (
-    f"wavedatasum_{shorelinepointfilename}_{mindate.date()}_{maxdate.date()}.gpkg"
+    f"wavedatasum_{shorelinepointfilename}_{mindate.date()}_{maxdate.date()}_{_cd_suffix}.gpkg"
 )
 outputfile_shp = (
-    f"wavedatasum_{shorelinepointfilename}_{mindate.date()}_{maxdate.date()}.shp"
+    f"wavedatasum_{shorelinepointfilename}_{mindate.date()}_{maxdate.date()}_{_cd_suffix}.shp"
 )
 # Variables to process
 variables = ["hs", "t01", "t02", "fp", "t0m1"]
-g = 9.81
+g = GRAVITY
+
+if CD_METHOD not in CD_METHOD_COEFFICIENTS:
+    raise ValueError(
+        f"unsupported CD_METHOD '{CD_METHOD}'. "
+        f"Available: {list(CD_METHOD_COEFFICIENTS.keys())}"
+    )
+
+cd_coeffs = CD_METHOD_COEFFICIENTS[CD_METHOD]
+
+if CD_METHOD == "hallermeier_outer" and (D50_M is None or D50_M <= 0):
+    raise ValueError("D50_M must be > 0 for hallermeier_outer")
+
+
+def compute_depth_of_closure(hs_val, t_val, hs_mean=None, hs_std=None, ts_mean=None):
+    if CD_METHOD == "hallermeier_outer":
+        if (
+            pd.isna(hs_mean)
+            or pd.isna(hs_std)
+            or pd.isna(ts_mean)
+            or ts_mean == 0
+        ):
+            return np.nan
+        return (hs_mean - 0.3 * hs_std) * ts_mean * np.sqrt(g / (5000 * D50_M))
+
+    if pd.isna(hs_val) or pd.isna(t_val) or t_val == 0:
+        return np.nan
+    return cd_coeffs["a"] * hs_val - cd_coeffs["b"] * hs_val**2 / (g * t_val**2)
 
 # Read gauge file
 WG_locations = os.path.join(
@@ -136,7 +171,16 @@ for i in tqdm(range(n_points)):
     Fp12h = df_point_sorted.loc[rank_index, "Fp"]
     Tp12h = np.nan if np.isnan(Fp12h) or Fp12h == 0 else 1.0 / Fp12h
     Tmean = np.mean([T0112h, T0212h, T0m112h, Tp12h])
-    CD = 2.28 * Hs12h - 68.5 * Hs12h**2 / (g * Tmean**2)
+    hs_mean = np.nanmean(hs_i)
+    hs_std = np.nanstd(hs_i)
+    ts_mean = np.nanmean(np.column_stack([t01_i, t02_i, t0m1_i]))
+    CD = compute_depth_of_closure(
+        Hs12h,
+        Tmean,
+        hs_mean=hs_mean,
+        hs_std=hs_std,
+        ts_mean=ts_mean,
+    )
 
     df_sum = pd.DataFrame(
         [
@@ -148,7 +192,11 @@ for i in tqdm(range(n_points)):
                 "T0m1_12h_y": T0m112h,
                 "Tp_12h_y": Tp12h,
                 "Tmean": Tmean,
+                "Hs_mean": hs_mean,
+                "Hs_std": hs_std,
+                "Ts_mean": ts_mean,
                 "CD": CD,
+                "CD_method": CD_METHOD,
             }
         ]
     )
@@ -169,7 +217,10 @@ gdf_sum.to_file(
 gdf_sum.to_file(
     os.path.join(grandparent_folder, outputloc, outputfile_shp), driver="ESRI Shapefile"
 )
-print("Computed H12h/y, T12h/y, and Fp12h/y for all seapoints.")
+print(
+    f"Computed H12h/y, T12h/y, and Fp12h/y for all seapoints using "
+    f"CD method: {CD_METHOD}."
+)
 
 # Define which variables to plot (Hs and the period variables)
 vars_to_plot = [
@@ -220,7 +271,7 @@ for var in tqdm(vars_to_plot):
     ax.set_ylabel("y (m)")
     ax.set_aspect("equal")
     plt.tight_layout()
-    plt.show()
+    plt.close()
 
     # Save the figure (PNG or PDF)
     fig_path = os.path.join(

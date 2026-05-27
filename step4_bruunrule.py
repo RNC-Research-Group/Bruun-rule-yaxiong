@@ -15,25 +15,26 @@ import math
 import glob
 from pyproj import Transformer
 from tqdm.auto import tqdm
+from depthofclosure_settings import CD_METHOD, B_SOURCE, CD_METHOD_SUFFIX
 
 tqdm.pandas()
 from tqdm.contrib.concurrent import process_map
 
 # input
+_cd_suffix = CD_METHOD_SUFFIX[CD_METHOD]
 inputloctransect = r"output/match"
-transect_wp_gpkg = "transect_wp.gpkg"
+transect_wp_gpkg = f"transect_wp_{_cd_suffix}.gpkg"
 inputlocdunepeak = r"output/dunepeak"
-# Match the dunepeak parameters from preprocess2_dunepeak.py: fw5_bw20_s5_pct5
-# If multiple pct versions exist, prefer pct5 (most recent standard)
-dunepeak_gpkg = "dunepeak_pct5_fw5_bw20_s5.gpkg"
+dunepeak_gpkg = "shoretoe_elev_combined.gpkg"
+print(f"CD_METHOD={CD_METHOD}  B_SOURCE={B_SOURCE}  dunepeak_gpkg={dunepeak_gpkg}")
 bathyfolderloc = r"input/Bathymetry250m"
 bathyname = r"nzbathy_2016.tif"
 
 
 outputfigurefolder = "output/transect"
 outputfolder = r"output/bruunrule"
-outputfilename_gpkg = "bruunrule.gpkg"
-outputfilename_shp = "bruunrule.shp"
+outputfilename_gpkg = f"bruunrule_{_cd_suffix}.gpkg"
+outputfilename_shp = f"bruunrule_{_cd_suffix}.shp"
 
 # DSAS rates source for total observed retreat used in Bruun retreat term.
 # This CSV must contain Unique_ID, WLR and Duration.
@@ -253,18 +254,28 @@ def process_row(tup):
     row["closure_dist_median"] = np.nan
     row["closure_found"] = False
 
-    coast_elev = match.iloc[0]["coast_elev_m"]
-    shoreline_elev = match.iloc[0]["shoreline_elev_m"]
-
-    if pd.notna(coast_elev) and coast_elev < maxdunepeak:
-        dunepeak = coast_elev
-        row["choosefrom"] = "coast"
-    elif shoreline_elev < maxdunepeak:
-        dunepeak = shoreline_elev
-        row["choosefrom"] = "shoreline"
+    if B_SOURCE == "mhws_parquet":
+        # Use MHWS point elevation sampled from coastal LiDAR at MHWS XY
+        b_val = match.iloc[0]["B_mhws_elev_m"] if "B_mhws_elev_m" in match.columns else np.nan
+        if pd.notna(b_val) and b_val < maxdunepeak:
+            dunepeak = b_val
+            row["choosefrom"] = "mhws_parquet"
+        else:
+            dunepeak = maxdunepeak
+            row["choosefrom"] = "max"
     else:
-        dunepeak = maxdunepeak
-        row["choosefrom"] = "max"
+        # dune_crest_dem: use coastal LiDAR sampled at shoreline XY
+        coast_elev = match.iloc[0]["coast_elev_m"]
+        shoreline_elev = match.iloc[0]["shoreline_elev_m"]
+        if pd.notna(coast_elev) and coast_elev < maxdunepeak:
+            dunepeak = coast_elev
+            row["choosefrom"] = "coast"
+        elif shoreline_elev < maxdunepeak:
+            dunepeak = shoreline_elev
+            row["choosefrom"] = "shoreline"
+        else:
+            dunepeak = maxdunepeak
+            row["choosefrom"] = "max"
 
     if dunepeak < 0:
         dunepeak = 0

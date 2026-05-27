@@ -9,14 +9,12 @@ Created on Sat Oct 25 22:39:36 2025
 from tqdm import tqdm
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import rasterio as rio
-from rasterio.mask import mask
 import matplotlib.pyplot as plt
 import os
-import math
-# shapely is used for constructing directional buffer geometries
-from shapely.geometry import Point, Polygon
-from shapely import affinity
+import glob
+from depthofclosure_settings import CD_METHOD, B_SOURCE
 
 # input shoreline points directory; choose first gpkg found
 base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -29,56 +27,25 @@ if not os.path.exists(preferred_path):
         f"required shoreline file not found: {preferred_file} in {inputshorelinepoints}"
     )
 inputshorelinepointsfilename = preferred_file
-# buffer parameters used for elevation sampling
-# original circular buffer gave too much weight to seaward/sideward
-# directions.  we construct an anisotropic, oriented zone that
-# extends a little bit seaward, a bit either side, and a lot
-# landward along the local shore normal.  the geometry is built from
-# a rectangle with semicircular end‑caps.
-# all distances in metres
-forward_dist = 5    # how far to look seaward (small)
-backward_dist = 20   # how far to look landward (large)
-side_dist = 5        # lateral extent either side alongshore
 
-# statistic for crest estimation.  we only use the percentile
-# method – average the highest `top_fraction` of raster cells within the
-# buffer.  extra methods were previously experimented with but proved
-# unreliable, so they have been removed.
+print(f"CD_METHOD={CD_METHOD}  B_SOURCE={B_SOURCE}")
 
-# proportion of the buffer cells to include when calculating the crest.
-# 0.05 means the top 5 % of the elevations in the buffer, 0.01 means the top 1 %, etc.
-top_fraction = 0.05  # portion of the top elevations to average (0-1)
-# summary measure for the selected subset – mean (default) or median.
-# median is less influenced by an isolated high pixel such as a bush.
-top_statistic = 'mean'  # 'mean' or 'median'
-
-# parameters for profile‑based methods
-profile_step = 5      # metres between samples when scanning along normal
-# when using the 'first' method ignore any maxima within this distance of
-# the sample point (typically equal to forward_dist).  this prevents
-# picking up a single noisy pixel seaward of the toe or a very small
-# vegetated bump. set to 0 to allow peaks right next to the point.
-min_peak_dist = forward_dist
-
-# gap-aware tangent setting: if consecutive points are farther apart than
-# this threshold, treat them as different shoreline segments for orientation.
-# Tangent estimation works best with two nearby neighbors (previous + next),
-# can still operate with one nearby neighbor, and falls back to a neutral
-# axis when neither side has a nearby neighbor.
-alongshore_gap_threshold_m = 15
-
+# Dune-crest extraction parameters (1 m DEM workflow)
+MAX_POINT_GAP_M = 10.0  # do not connect shoreline points across larger gaps
+ORIENT_PROBE_MAX_M = 25.0  # left/right probe length from shoreline point
+ORIENT_PROBE_STEP_M = 2.0
+PROFILE_START_M = 2.0
+PROFILE_MAX_M = 80.0  # landward search distance for dune crest
+PROFILE_STEP_M = 1.0
+SMOOTH_WINDOW = 5  # moving-average window in samples (1 m spacing)
+MIN_RISE_M = 0.35  # minimum rise above local low before accepting crest
+CREST_AVG_SIDE_POINTS = 5  # average 5 points each side of detected crest (10-point mean)
+FLAT_TOL_M = 0.03  # treat elevations within 3 cm as a flat crest plateau
+POST_CREST_CHECK_POINTS = 6  # require no further rise over next ~6 m
 
 outputloc = r"output/dunepeak"
-# include the directional parameters in output names
-# plus the percentile fraction for clarity
-outputfilename = (
-    f"dunepeak_pct{int(top_fraction*100)}_fw{forward_dist}_bw{backward_dist}"
-    f"_s{side_dist}.gpkg"
-)
-outputfigname = (
-    f"dunepeak_pct{int(top_fraction*100)}_fw{forward_dist}_bw{backward_dist}"
-    f"_s{side_dist}.png"
-)
+outputfilename = "shoretoe_elev_combined.gpkg"
+outputfigname = "shoretoe_elev_combined.png"
 # currentlocation
 current_script = os.path.abspath(__file__)
 grandparent_folder = os.path.dirname(os.path.dirname(current_script))
@@ -92,184 +59,259 @@ lastestuniquepoints = gpd.read_file(
 )
 print("shoreline points CRS:", lastestuniquepoints.crs)
 
-coast_DEM = os.path.join(coastfolderloc, "NewZealand_Coastal_DEM_Merged_250m.tif")
+# Prefer a 1 m DEM when available; otherwise fall back to merged 250 m file.
+coast_dem_candidates = sorted(glob.glob(os.path.join(coastfolderloc, "*1m*.tif")))
+if coast_dem_candidates:
+    coast_DEM = coast_dem_candidates[0]
+else:
+    coast_DEM = os.path.join(coastfolderloc, "NewZealand_Coastal_DEM_Merged_250m.tif")
 
-coast_elev = np.full(len(lastestuniquepoints), np.nan)  # initialise all NaN
-# coast_source = np.full(len(lastestuniquepoints), None, dtype=object)
+print(f"Using coastal DEM: {coast_DEM}")
+
+
+def moving_average(values, window):
+    if window <= 1 or len(values) == 0:
+        return values
+    return (
+        pd.Series(values)
+        .rolling(window=window, center=True, min_periods=1)
+        .mean()
+        .to_numpy()
+    )
+
+
+def sample_dem_point(src, x, y):
+    left, bottom, right, top = src.bounds
+    if not (left <= x <= right and bottom <= y <= top):
+        return np.nan
+    try:
+        val = list(src.sample([(x, y)]))[0][0]
+    except Exception:
+        return np.nan
+
+    if src.nodata is not None and val == src.nodata:
+        return np.nan
+    if not np.isfinite(val) or val <= -9990 or val > 1000:
+        return np.nan
+    return float(val)
+
+
+def sample_dem_profile(src, x0, y0, ux, uy, distances):
+    coords = [(x0 + ux * d, y0 + uy * d) for d in distances]
+    left, bottom, right, top = src.bounds
+    values = np.full(len(coords), np.nan)
+
+    for i, (x, y) in enumerate(coords):
+        if not (left <= x <= right and bottom <= y <= top):
+            continue
+        try:
+            val = list(src.sample([(x, y)]))[0][0]
+            if src.nodata is not None and val == src.nodata:
+                continue
+            if not np.isfinite(val) or val <= -9990 or val > 1000:
+                continue
+            values[i] = float(val)
+        except Exception:
+            continue
+    return values
+
+
+def first_local_peak(distances, profile, min_rise_m):
+    smoothed = moving_average(profile, SMOOTH_WINDOW)
+    if np.isfinite(smoothed).sum() < 3:
+        return np.nan, np.nan, None, smoothed
+
+    n = len(smoothed)
+
+    for i in range(1, n - 1):
+        z_prev, z_now, z_next = smoothed[i - 1], smoothed[i], smoothed[i + 1]
+        if not (np.isfinite(z_now) and np.isfinite(z_prev) and np.isfinite(z_next)):
+            continue
+
+        running_min = np.nanmin(smoothed[: i + 1])
+        if not np.isfinite(running_min) or (z_now - running_min) < min_rise_m:
+            continue
+
+        # Candidate must be at/near a local top, allowing a flat plateau.
+        if (z_now + FLAT_TOL_M) < z_prev or (z_now + FLAT_TOL_M) < z_next:
+            continue
+
+        # If profile is still rising in the next few meters, this is not the crest yet.
+        look_end = min(n, i + 1 + POST_CREST_CHECK_POINTS)
+        post = smoothed[i + 1 : look_end]
+        post = post[np.isfinite(post)]
+        if post.size > 0 and np.nanmax(post) > (z_now + FLAT_TOL_M):
+            continue
+
+        # Expand around i to capture flat-top crest and use center index.
+        left = i
+        right = i
+        while left - 1 >= 0 and np.isfinite(smoothed[left - 1]) and abs(smoothed[left - 1] - z_now) <= FLAT_TOL_M:
+            left -= 1
+        while right + 1 < n and np.isfinite(smoothed[right + 1]) and abs(smoothed[right + 1] - z_now) <= FLAT_TOL_M:
+            right += 1
+        peak_idx = (left + right) // 2
+        return float(smoothed[peak_idx]), float(distances[peak_idx]), peak_idx, smoothed
+
+    if np.isfinite(smoothed).any():
+        peak_idx = int(np.nanargmax(smoothed))
+        return float(smoothed[peak_idx]), float(distances[peak_idx]), peak_idx, smoothed
+    return np.nan, np.nan, None, smoothed
+
+
+def average_around_peak(smoothed_profile, peak_idx, side_points):
+    if peak_idx is None or len(smoothed_profile) == 0:
+        return np.nan
+
+    left_idx = list(range(max(0, peak_idx - side_points), peak_idx))
+    right_idx = list(range(peak_idx + 1, min(len(smoothed_profile), peak_idx + 1 + side_points)))
+    idx = left_idx + right_idx
+
+    vals = smoothed_profile[idx] if idx else np.array([])
+    vals = vals[np.isfinite(vals)]
+
+    # Near segment boundaries there may be fewer than 10 side points; include crest as fallback.
+    if vals.size < max(4, side_points):
+        i0 = max(0, peak_idx - side_points)
+        i1 = min(len(smoothed_profile), peak_idx + side_points + 1)
+        vals = smoothed_profile[i0:i1]
+        vals = vals[np.isfinite(vals)]
+
+    if vals.size == 0:
+        return np.nan
+    return float(np.nanmean(vals))
+
+
+def compute_segment_ids(gdf, max_gap_m):
+    if "Unique_ID" in gdf.columns:
+        order = pd.to_numeric(gdf["Unique_ID"], errors="coerce").sort_values().index
+        work = gdf.loc[order].copy()
+    else:
+        work = gdf.copy()
+
+    work["point_X"] = work.geometry.x
+    work["point_Y"] = work.geometry.y
+    dx = work["point_X"].diff()
+    dy = work["point_Y"].diff()
+    gap = np.hypot(dx, dy)
+    new_segment = gap.isna() | (gap > max_gap_m)
+    work["segment_id"] = new_segment.cumsum().astype(int)
+    return work
+
+# Build contiguous shoreline segments (do not connect points across >10 m gaps).
+lastestuniquepoints = compute_segment_ids(lastestuniquepoints, MAX_POINT_GAP_M)
+
+# Extract dune crest from coastal DEM using left/right seaward inference.
+coast_elev = np.full(len(lastestuniquepoints), np.nan)
+crest_dist_m = np.full(len(lastestuniquepoints), np.nan)
+seaward_side = np.full(len(lastestuniquepoints), "unknown", dtype=object)
+crest_peak_m = np.full(len(lastestuniquepoints), np.nan)
+crest_avg10_m = np.full(len(lastestuniquepoints), np.nan)
 
 with rio.open(coast_DEM) as src:
-    # Reproject buffer to DEM CRS if needed
-
     if lastestuniquepoints.crs != src.crs:
         lastestuniquepoints = lastestuniquepoints.to_crs(src.crs)
+        lastestuniquepoints["point_X"] = lastestuniquepoints.geometry.x
+        lastestuniquepoints["point_Y"] = lastestuniquepoints.geometry.y
 
-    left, bottom, right, top = src.bounds
-
-    # precompute shore‑tangent vectors for every point using gap-aware
-    # neighbors. Consecutive rows farther apart than
-    # `alongshore_gap_threshold_m` are treated as segment breaks so that
-    # cross-beach jumps do not influence local normals.
-    coords = np.array([[pt.x, pt.y] for pt in lastestuniquepoints.geometry])
-    npts = len(coords)
-    tangents = np.zeros_like(coords)
-
-    if npts > 1:
-        seg_vec = coords[1:] - coords[:-1]
-        seg_dist = np.linalg.norm(seg_vec, axis=1)
-
-        prev_vec = np.zeros_like(coords)
-        prev_vec[1:] = seg_vec
-        next_vec = np.zeros_like(coords)
-        next_vec[:-1] = seg_vec
-
-        prev_valid = np.zeros(npts, dtype=bool)
-        prev_valid[1:] = seg_dist <= alongshore_gap_threshold_m
-        next_valid = np.zeros(npts, dtype=bool)
-        next_valid[:-1] = seg_dist <= alongshore_gap_threshold_m
-
-        both_valid = prev_valid & next_valid
-        only_prev = prev_valid & ~next_valid
-        only_next = next_valid & ~prev_valid
-
-        tangents[both_valid] = prev_vec[both_valid] + next_vec[both_valid]
-        tangents[only_prev] = prev_vec[only_prev]
-        tangents[only_next] = next_vec[only_next]
-
-    # if tangent is still zero (isolated point), use a neutral fallback;
-    # the inland/seaward flip test below still selects the better side.
-    zero_mask = np.linalg.norm(tangents, axis=1) == 0
-    tangents[zero_mask] = np.array([1.0, 0.0])
-
-    # Loop through points that are still NaN
-    for i, geom in tqdm(
-        enumerate(lastestuniquepoints.geometry),
+    for i in tqdm(
+        range(len(lastestuniquepoints)),
         total=len(lastestuniquepoints),
-        desc="Processing points",
+        desc="Finding dune crest from coastal DEM",
     ):
-        # Skip if already found a value
-        if not np.isnan(coast_elev[i]):
+        row = lastestuniquepoints.iloc[i]
+        x0, y0 = row.geometry.x, row.geometry.y
+        seg_id = row["segment_id"]
+
+        z0 = sample_dem_point(src, x0, y0)
+
+        has_prev = i > 0 and lastestuniquepoints.iloc[i - 1]["segment_id"] == seg_id
+        has_next = i < len(lastestuniquepoints) - 1 and lastestuniquepoints.iloc[i + 1]["segment_id"] == seg_id
+
+        if has_prev and has_next:
+            p_prev = lastestuniquepoints.iloc[i - 1].geometry
+            p_next = lastestuniquepoints.iloc[i + 1].geometry
+            tx, ty = p_next.x - p_prev.x, p_next.y - p_prev.y
+        elif has_prev:
+            p_prev = lastestuniquepoints.iloc[i - 1].geometry
+            tx, ty = x0 - p_prev.x, y0 - p_prev.y
+        elif has_next:
+            p_next = lastestuniquepoints.iloc[i + 1].geometry
+            tx, ty = p_next.x - x0, p_next.y - y0
+        else:
+            coast_elev[i] = z0
+            seaward_side[i] = "unknown"
             continue
 
-        # Skip if point outside DEM extent
-        if not (left <= geom.x <= right and bottom <= geom.y <= top):
+        tlen = np.hypot(tx, ty)
+        if tlen == 0:
+            coast_elev[i] = z0
+            seaward_side[i] = "unknown"
             continue
 
-        # Try sampling from this DEM
-        try:
-            # construct a directional sampling polygon aligned with
-            # the local shore normal.  a small `forward_dist` limits
-            # sampling in the seaward direction, while a large
-            # `backward_dist` reaches into the dune system.  `side_dist`
-            # controls the width alongshore.  The shape is a rectangle
-            # capped with semicircles for smoothness.
+        tx /= tlen
+        ty /= tlen
+        nx_left, ny_left = -ty, tx
+        nx_right, ny_right = ty, -tx
 
-            # determine unit normal vector from precomputed tangent.  The
-            # tangent vector `t` points roughly alongshore, so a 90°
-            # rotation gives a vector perpendicular to the coast.  There are
-            # two possible normals (left/right of the tangent) – one will
-            # point landward, the other seaward.  A 180° rotation would just
-            # flip the alongshore direction and is not relevant here.
-            t = tangents[i]
-            if np.linalg.norm(t) == 0:
-                t = np.array([1.0, 0.0])
+        probe_dist = np.arange(
+            ORIENT_PROBE_STEP_M, ORIENT_PROBE_MAX_M + ORIENT_PROBE_STEP_M, ORIENT_PROBE_STEP_M
+        )
+        z_left = sample_dem_profile(src, x0, y0, nx_left, ny_left, probe_dist)
+        z_right = sample_dem_profile(src, x0, y0, nx_right, ny_right, probe_dist)
+        left_mean = np.nanmean(z_left)
+        right_mean = np.nanmean(z_right)
 
-            # initial normal (90° rotation clockwise)
-            normal = np.array([t[1], -t[0]])
-
-            # use local DEM sampling to decide which normal points inland.
-            # sample a few points along both `normal` and `-normal` and take
-            # the mean elevation; the landward direction should have higher
-            # values (dune vs sea).  this automatically handles islands and
-            # weird coast orientations without needing an external polygon.
-            try:
-                def mean_along(direction):
-                    vals = []
-                    step = 10  # metres between samples
-                    nsteps = 5  # how many hops
-                    for k in range(1, nsteps + 1):
-                        dx, dy = direction * (k * step)
-                        sx, sy = geom.x + dx, geom.y + dy
-                        if left <= sx <= right and bottom <= sy <= top:
-                            v = list(src.sample([(sx, sy)]))[0][0]
-                            if not np.isnan(v) and v < 1000:
-                                vals.append(v)
-                    return np.nanmean(vals) if vals else np.nan
-
-                mean_norm = mean_along(normal)
-                mean_flip = mean_along(-normal)
-                # if the flipped direction has larger mean elevation, switch
-                if not np.isnan(mean_flip) and (
-                    np.isnan(mean_norm) or mean_flip > mean_norm
-                ):
-                    normal = -normal
-            except Exception:
-                # if sampling fails for any reason, fall back to the
-                # previously hard‑coded orientation (normal = [t[1], -t[0]])
-                pass
-
-
-            # local (normal/alongshore) buffer geometry
-            rect = Polygon([
-                (-forward_dist, -side_dist),
-                (-forward_dist, side_dist),
-                (backward_dist, side_dist),
-                (backward_dist, -side_dist),
-            ])
-            cap_seaward = Point(-forward_dist, 0).buffer(side_dist, resolution=16)
-            cap_landward = Point(backward_dist, 0).buffer(side_dist, resolution=16)
-            buf_local = rect.union(cap_seaward).union(cap_landward)
-
-            # rotate/translate into map coordinates
-            angle = math.degrees(math.atan2(normal[1], normal[0]))
-            buf_rot = affinity.rotate(buf_local, angle, origin=(0, 0))
-            geom_buffer = affinity.translate(buf_rot, geom.x, geom.y)
-
-            # crop DEM within the oriented buffer polygon; we always
-            # grab this block because the percentile method still needs
-            # it, and it provides a fallback for the profile techniques.
-            out_image, _ = mask(src, [geom_buffer], crop=True, filled=False)
-            data = out_image[0].astype(float)
-            if np.ma.isMaskedArray(data):
-                data = data.filled(np.nan)
-
-            if src.nodata is not None:
-                data[data == src.nodata] = np.nan
-
-            # Remove invalid/sentinel values from statistics
-            data[(data <= -9990) | (data > 1000)] = np.nan
-            data = data[np.isfinite(data)]
-
-            # compute percentile-based crest value (the only method now)
-            if data.size == 0:
-                val = math.nan
+        if np.isfinite(left_mean) and np.isfinite(right_mean):
+            if left_mean < right_mean:
+                seaward_side[i] = "left"
+                ux_land, uy_land = nx_right, ny_right
             else:
-                n = max(1, int(np.ceil(data.size * top_fraction)))
-                top_vals = np.sort(data)[-n:]
-                if top_statistic == 'median':
-                    val = np.nanmedian(top_vals)
-                else:
-                    val = np.nanmean(top_vals)
-            
-            if not np.isnan(val):
-                coast_elev[i] = val
-        except Exception:
-            continue  # skip invalid or out-of-bounds sample
-lastestuniquepoints["coast_elev_m"] = coast_elev
-# lastestuniquepoints["source_DEM"] = coast_source
+                seaward_side[i] = "right"
+                ux_land, uy_land = nx_left, ny_left
+        elif np.isfinite(left_mean):
+            seaward_side[i] = "right_unknown"
+            ux_land, uy_land = nx_left, ny_left
+        elif np.isfinite(right_mean):
+            seaward_side[i] = "left_unknown"
+            ux_land, uy_land = nx_right, ny_right
+        else:
+            coast_elev[i] = z0
+            seaward_side[i] = "unknown"
+            continue
 
-# === Open DEM ===
+        profile_dist = np.arange(PROFILE_START_M, PROFILE_MAX_M + PROFILE_STEP_M, PROFILE_STEP_M)
+        z_profile = sample_dem_profile(src, x0, y0, ux_land, uy_land, profile_dist)
+        z_peak, d_peak, peak_idx, z_smoothed = first_local_peak(profile_dist, z_profile, MIN_RISE_M)
+        z_avg10 = average_around_peak(z_smoothed, peak_idx, CREST_AVG_SIDE_POINTS)
+
+        if np.isfinite(z_peak):
+            coast_elev[i] = z_avg10 if np.isfinite(z_avg10) else z_peak
+            crest_dist_m[i] = d_peak
+            crest_peak_m[i] = z_peak
+            crest_avg10_m[i] = z_avg10
+        else:
+            coast_elev[i] = z0
+            crest_dist_m[i] = np.nan
+            crest_peak_m[i] = np.nan
+            crest_avg10_m[i] = np.nan
+
+lastestuniquepoints["coast_elev_m"] = coast_elev
+lastestuniquepoints["dune_crest_dist_m"] = crest_dist_m
+lastestuniquepoints["seaward_side"] = seaward_side
+lastestuniquepoints["dune_crest_peak_m"] = crest_peak_m
+lastestuniquepoints["dune_crest_avg10_m"] = crest_avg10_m
+lastestuniquepoints = lastestuniquepoints.sort_index()
+
+# === Open DEM for bathymetry elevation at shoreline XY ===
 bathy_path = os.path.join(bathyfolderloc, bathyname)
 
 with rio.open(bathy_path) as src:
-    # Reproject shoreline points if needed
     if lastestuniquepoints.crs != src.crs:
         lastestuniquepoints = lastestuniquepoints.to_crs(src.crs)
         print(f"Reprojected shoreline points to match DEM CRS: {src.crs}")
 
-    # Prepare list for peak elevation values
     peak_elev_values = []
-
-    # Loop through each shoreline point
     for geom in tqdm(
         lastestuniquepoints.geometry, desc="Sampling DEM values from bathy"
     ):
@@ -278,11 +320,67 @@ with rio.open(bathy_path) as src:
             peak_val = val
         except Exception:
             peak_val = np.nan
-
         peak_elev_values.append(peak_val)
 
-# === Add shoreline-point DEM value to GeoDataFrame ===
 lastestuniquepoints["shoreline_elev_m"] = peak_elev_values
+
+# === Source B (dune/berm height) based on B_SOURCE setting ===
+# === Always compute both B columns so output GPKG works with any CD_METHOD ===
+# B_mhws_elev_m: coastal LiDAR elevation at MHWS XY (for hallermeier_outer / birkemeier_1985)
+# coast_elev_m:  coastal LiDAR elevation at shoreline XY (for hallermeier_inner)
+proxy_parquet = os.path.join(base_dir, "code", "nzccd_rates_proxy.parquet")
+if not os.path.exists(proxy_parquet):
+    print(
+        f"WARNING: nzccd_rates_proxy.parquet not found at {proxy_parquet}. "
+        "B_mhws_elev_m will be NaN. Required for hallermeier_outer / birkemeier_1985."
+    )
+    lastestuniquepoints["B_mhws_elev_m"] = np.nan
+    lastestuniquepoints["mhws_x"] = np.nan
+    lastestuniquepoints["mhws_y"] = np.nan
+else:
+    proxy = gpd.read_parquet(proxy_parquet)[["UniqueID", "geometry"]].copy()
+    proxy = proxy.to_crs(lastestuniquepoints.crs)
+    proxy["mhws_x"] = proxy.geometry.x
+    proxy["mhws_y"] = proxy.geometry.y
+
+    mhws_elev = np.full(len(proxy), np.nan)
+    with rio.open(coast_DEM) as src:
+        if proxy.crs != src.crs:
+            proxy = proxy.to_crs(src.crs)
+        left, bottom, right, top = src.bounds
+        for i, geom in tqdm(
+            enumerate(proxy.geometry),
+            total=len(proxy),
+            desc="Sampling coastal LiDAR at MHWS points",
+        ):
+            if not (left <= geom.x <= right and bottom <= geom.y <= top):
+                continue
+            try:
+                val = list(src.sample([(geom.x, geom.y)]))[0][0]
+                if src.nodata is not None and val == src.nodata:
+                    val = np.nan
+                if not np.isfinite(val) or val <= -9990 or val > 1000:
+                    val = np.nan
+                mhws_elev[i] = val
+            except Exception:
+                continue
+    proxy["B_mhws_elev_m"] = mhws_elev
+
+    proxy["UniqueID_norm"] = (
+        pd.to_numeric(proxy["UniqueID"], errors="coerce").astype("Int64").astype(str)
+    )
+    lastestuniquepoints["UniqueID_norm"] = (
+        pd.to_numeric(lastestuniquepoints["Unique_ID"], errors="coerce").astype("Int64").astype(str)
+    )
+    lastestuniquepoints = lastestuniquepoints.merge(
+        proxy[["UniqueID_norm", "B_mhws_elev_m", "mhws_x", "mhws_y"]],
+        on="UniqueID_norm",
+        how="left",
+    ).drop(columns=["UniqueID_norm"])
+    print(
+        f"MHWS elevation joined: "
+        f"{lastestuniquepoints['B_mhws_elev_m'].notna().sum()} / {len(lastestuniquepoints)} points"
+    )
 
 
 # savedata
@@ -291,7 +389,6 @@ lastestuniquepoints.to_file(
 )
 
 var = "coast_elev_m"
-# Don't cap visualization – show actual range
 vmin = lastestuniquepoints[var].quantile(0.02)
 vmax = lastestuniquepoints[var].quantile(0.98)
 
@@ -307,20 +404,20 @@ im = lastestuniquepoints.plot(
     edgecolor="k",
     linewidth=0.3,
 )
-cbar = im.get_figure().axes[-1]  # colourbar axis is the last axis
+cbar = im.get_figure().axes[-1]
 cbar.set_ylabel("Height (m)", fontsize=10)
 mean_var = lastestuniquepoints[var].mean()
 std_var = lastestuniquepoints[var].std()
 ax.set_title(
-    f"percentile={int(top_fraction*100)}%, forward={forward_dist} m, backward={backward_dist} m, side={side_dist} m"
-    f"side={side_dist} m \n dunepeak={mean_var:.1f}±{std_var:.1f} m",
+    f"Shoreline point elevation (dune toe / veg edge)\n"
+    f"mean={mean_var:.1f}\xb1{std_var:.1f} m",
     fontsize=10,
 )
 ax.set_xlabel("x (m)")
 ax.set_ylabel("y (m)")
 ax.set_aspect("equal")
 plt.tight_layout()
-plt.show()
+plt.close()
 
 fig.savefig(
     os.path.join(grandparent_folder, outputloc, outputfigname),

@@ -2,6 +2,7 @@
 import os
 import geopandas as gpd
 from slr_settings import CONFIDENCE_LEVEL, YEARS, SCENARIOS, PERCENTILES_STR
+from depthofclosure_settings import CD_METHOD, CD_METHOD_SUFFIX
 
 # Iteration settings requested.
 # Note: slr_settings.py defines WHICH confidence/year/scenario/percentile
@@ -16,11 +17,13 @@ currentyear = 2020  # used to convert recession distance to annual rate
 current_script = os.path.abspath(__file__)
 grandparent_folder = os.path.dirname(os.path.dirname(current_script))
 
-inputfilename = os.path.join(grandparent_folder, "output/bruunrule/bruunrule.gpkg")
+inputfilename = os.path.join(grandparent_folder, f"output/bruunrule/bruunrule_{CD_METHOD_SUFFIX[CD_METHOD]}.gpkg")
 slr_matchfile = os.path.join(grandparent_folder, "input/SLR/merged_SLR_match.gpkg")
 if not os.path.exists(slr_matchfile):
     slr_matchfile = os.path.join(grandparent_folder, "input/SLR/SLR_match.gpkg")
 confidence_level_filename = confidence_level.replace(" ", "_")
+
+cd_suffix = CD_METHOD_SUFFIX[CD_METHOD]
 
 # Base data
 slr_match = gpd.read_file(slr_matchfile)
@@ -128,8 +131,8 @@ for year in years:
 
             output_csv = os.path.join(
                 grandparent_folder,
-                f"output/bruunrule/NZ_{confidence_level_filename}_y{year}_s{scenario}_p{percentile}.csv",
+                f"output/bruunrule/NZ_{confidence_level_filename}_y{year}_s{scenario}_p{percentile}_{cd_suffix}.csv",
             )
             out[cols_for_map].to_csv(output_csv, index=False, float_format="%.6f")
             out.to_file(output_gpkg, driver="GPKG")
-            print(f"Saved SLR-enriched output: {output_gpkg}")
+            print(f"Saved SLR-enriched outputs: {output_gpkg}, {output_csv}")

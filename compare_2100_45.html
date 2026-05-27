@@ -1,0 +1,310 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SSP4.5 2100 Compare (April vs Birkemeier)</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    .panel {
+      background: rgba(0, 0, 0, 0.8);
+      color: #fff;
+      padding: 10px;
+      border-radius: 6px;
+      min-width: 280px;
+      font: 13px/1.4 sans-serif;
+    }
+    .swatch {
+      display: inline-block;
+      width: 18px;
+      margin-right: 6px;
+      vertical-align: middle;
+      border-top: 3px solid;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script>
+    var map = L.map('map', { center: [-42, 172], zoom: 6 });
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution: 'Tiles &copy; Esri'
+    }).addTo(map);
+
+    var aprilPath = 'output/bruunrule/NZ_medium_confidence_y2100_s4.5_p0.5.csv';
+    var birkPath = 'output/birkemeier_latest/NZ_medium_confidence_y2100_s4.5_p0.5_birk_toe.csv';
+
+    var aprilLayer = L.layerGroup().addTo(map);
+    var birkLayer = L.layerGroup().addTo(map);
+
+    function parseCSV(url) {
+      return new Promise(function(resolve, reject) {
+        Papa.parse(url, {
+          header: true,
+          download: true,
+          dynamicTyping: true,
+          skipEmptyLines: true,
+          complete: function(results) { resolve(results.data); },
+          error: function(err) { reject(err); }
+        });
+      });
+    }
+
+    function buildProjectedRuns(rows) {
+      var adjacentJoinMaxDistM = 35;
+      var projectedJoinMaxDistM = 80;
+      var validRows = rows.filter(function(r) {
+        return Number.isFinite(r.proj_lat) && Number.isFinite(r.proj_lon) &&
+               Number.isFinite(r.point_X) && Number.isFinite(r.point_Y);
+      });
+      if (!validRows.length) return [];
+
+      var cell = adjacentJoinMaxDistM;
+      var maxNearest = 2;
+      var buckets = new Map();
+      function key(ix, iy) { return ix + '|' + iy; }
+
+      for (var i = 0; i < validRows.length; i++) {
+        var x = Number(validRows[i].point_X);
+        var y = Number(validRows[i].point_Y);
+        var ix = Math.floor(x / cell);
+        var iy = Math.floor(y / cell);
+        var k = key(ix, iy);
+        if (!buckets.has(k)) buckets.set(k, []);
+        buckets.get(k).push(i);
+      }
+
+      var nearest = Array.from({ length: validRows.length }, function() { return []; });
+
+      for (var i = 0; i < validRows.length; i++) {
+        var xi = Number(validRows[i].point_X);
+        var yi = Number(validRows[i].point_Y);
+        var iix = Math.floor(xi / cell);
+        var iiy = Math.floor(yi / cell);
+        var candidates = [];
+
+        for (var dx = -1; dx <= 1; dx++) {
+          for (var dy = -1; dy <= 1; dy++) {
+            var arr = buckets.get(key(iix + dx, iiy + dy)) || [];
+            for (var c = 0; c < arr.length; c++) {
+              var j = arr[c];
+              if (j === i) continue;
+              var xj = Number(validRows[j].point_X);
+              var yj = Number(validRows[j].point_Y);
+              var d = Math.hypot(xi - xj, yi - yj);
+              if (!Number.isFinite(d) || d <= 0 || d > adjacentJoinMaxDistM) continue;
+
+              var dLat = Number(validRows[j].proj_lat) - Number(validRows[i].proj_lat);
+              var dLon = Number(validRows[j].proj_lon) - Number(validRows[i].proj_lon);
+              var latMid = (Number(validRows[j].proj_lat) + Number(validRows[i].proj_lat)) * 0.5;
+              var dProj = Math.hypot(dLat * 111320, dLon * 111320 * Math.cos(latMid * Math.PI / 180));
+              if (!Number.isFinite(dProj) || dProj > projectedJoinMaxDistM) continue;
+
+              candidates.push({ j: j, d: d });
+            }
+          }
+        }
+
+        candidates.sort(function(a, b) { return a.d - b.d; });
+        nearest[i] = candidates.slice(0, maxNearest);
+      }
+
+      var nearestSet = nearest.map(function(list) {
+        var s = new Set();
+        list.forEach(function(v) { s.add(v.j); });
+        return s;
+      });
+
+      var edges = [];
+      for (var i = 0; i < validRows.length; i++) {
+        for (var c = 0; c < nearest[i].length; c++) {
+          var j = nearest[i][c].j;
+          var d = nearest[i][c].d;
+          if (j <= i) continue;
+          if (nearestSet[j].has(i)) edges.push({ i: i, j: j, d: d });
+        }
+      }
+      edges.sort(function(a, b) { return a.d - b.d; });
+
+      var adjacency = Array.from({ length: validRows.length }, function() { return new Set(); });
+      var degree = new Array(validRows.length).fill(0);
+      for (var e = 0; e < edges.length; e++) {
+        var edge = edges[e];
+        if (degree[edge.i] >= 2 || degree[edge.j] >= 2) continue;
+        adjacency[edge.i].add(edge.j);
+        adjacency[edge.j].add(edge.i);
+        degree[edge.i] += 1;
+        degree[edge.j] += 1;
+      }
+
+      var visited = new Array(validRows.length).fill(false);
+      var runs = [];
+
+      for (var i = 0; i < validRows.length; i++) {
+        if (visited[i] || adjacency[i].size === 0) continue;
+        var stack = [i];
+        visited[i] = true;
+        var component = [];
+
+        while (stack.length) {
+          var n = stack.pop();
+          component.push(n);
+          var nbrs = Array.from(adjacency[n]);
+          for (var k = 0; k < nbrs.length; k++) {
+            var nb = nbrs[k];
+            if (!visited[nb]) {
+              visited[nb] = true;
+              stack.push(nb);
+            }
+          }
+        }
+
+        if (component.length < 2) continue;
+        var componentSet = new Set(component);
+        var endpoints = component.filter(function(idx) {
+          var deg = 0;
+          adjacency[idx].forEach(function(nb) { if (componentSet.has(nb)) deg += 1; });
+          return deg === 1;
+        });
+
+        var start = endpoints.length ? endpoints[0] : component[0];
+        var ordered = [];
+        var used = new Set();
+        var prev = null;
+        var cur = start;
+
+        while (cur !== null && !used.has(cur)) {
+          ordered.push(cur);
+          used.add(cur);
+          var next = null;
+          var nbs = Array.from(adjacency[cur]).filter(function(nb) {
+            return componentSet.has(nb) && !used.has(nb);
+          });
+          if (nbs.length === 1) next = nbs[0];
+          else if (nbs.length > 1) next = prev !== null ? (nbs.find(function(nb){ return nb !== prev; }) || nbs[0]) : nbs[0];
+          prev = cur;
+          cur = next;
+        }
+
+        if (ordered.length < 2) continue;
+        var coords = [];
+        for (var p = 0; p < ordered.length; p++) {
+          var r = validRows[ordered[p]];
+          coords.push([Number(r.proj_lat), Number(r.proj_lon)]);
+        }
+        runs.push(coords);
+      }
+
+      return runs;
+    }
+
+    function fillProjectedFallbackFromWave(rows) {
+      var filled = 0;
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        if (Number.isFinite(r.proj_lat) && Number.isFinite(r.proj_lon)) continue;
+        if (!Number.isFinite(r.lat) || !Number.isFinite(r.lon)) continue;
+        if (!Number.isFinite(r.wave_lat) || !Number.isFinite(r.wave_lon)) continue;
+        if (!Number.isFinite(r.R_SLR)) continue;
+
+        var lat0 = Number(r.lat);
+        var lon0 = Number(r.lon);
+        var latW = Number(r.wave_lat);
+        var lonW = Number(r.wave_lon);
+        var retreatM = Number(r.R_SLR);
+
+        // Convert local lon/lat differences to meters and derive transect unit vector.
+        var cosLat = Math.cos(lat0 * Math.PI / 180);
+        var dE = (lonW - lon0) * 111320 * cosLat;
+        var dN = (latW - lat0) * 111320;
+        var norm = Math.hypot(dE, dN);
+        if (!Number.isFinite(norm) || norm <= 0) continue;
+
+        var uE = dE / norm;
+        var uN = dN / norm;
+        var shiftE = -retreatM * uE;
+        var shiftN = -retreatM * uN;
+
+        var lat1 = lat0 + shiftN / 111320;
+        var lon1 = lon0 + shiftE / (111320 * cosLat);
+
+        if (Number.isFinite(lat1) && Number.isFinite(lon1)) {
+          r.proj_lat = lat1;
+          r.proj_lon = lon1;
+          filled += 1;
+        }
+      }
+      return filled;
+    }
+
+    function drawRuns(layer, runs, style) {
+      for (var i = 0; i < runs.length; i++) {
+        L.polyline(runs[i], style).addTo(layer);
+      }
+    }
+
+    var info = L.control({ position: 'topright' });
+    info.onAdd = function() {
+      var div = L.DomUtil.create('div', 'panel');
+      div.id = 'info-panel';
+      div.innerHTML = 'Loading compare datasets...';
+      return div;
+    };
+    info.addTo(map);
+
+    Promise.all([parseCSV(aprilPath), parseCSV(birkPath)]).then(function(results) {
+      var aprilRows = results[0];
+      var birkRows = results[1];
+
+      var birkFilled = fillProjectedFallbackFromWave(birkRows);
+
+      var aprilRuns = buildProjectedRuns(aprilRows);
+      var birkRuns = buildProjectedRuns(birkRows);
+
+      drawRuns(aprilLayer, aprilRuns, {
+        color: '#f4a736',
+        weight: 3,
+        opacity: 0.95,
+        lineCap: 'round',
+        lineJoin: 'round'
+      });
+
+      drawRuns(birkLayer, birkRuns, {
+        color: '#2b6cb0',
+        weight: 2.5,
+        opacity: 0.95,
+        dashArray: '8,6',
+        lineCap: 'round',
+        lineJoin: 'round'
+      });
+
+      var bounds = L.latLngBounds();
+      aprilLayer.eachLayer(function(l) { bounds.extend(l.getBounds()); });
+      birkLayer.eachLayer(function(l) { bounds.extend(l.getBounds()); });
+      if (bounds.isValid()) map.fitBounds(bounds.pad(0.05));
+
+      var panel = document.getElementById('info-panel');
+      panel.innerHTML =
+        '<div><b>Scenario:</b> SSP4.5</div>' +
+        '<div><b>Year:</b> 2100</div>' +
+        '<div style="margin-top:6px;"><span class="swatch" style="border-color:#f4a736"></span>April (Hallermeier-era)</div>' +
+        '<div><span class="swatch" style="border-color:#2b6cb0;border-top-style:dashed"></span>May11 Birkemeier (_birk_toe)</div>' +
+        '<div style="margin-top:6px;font-size:12px;opacity:.9;">April rows: ' + aprilRows.length + ', runs: ' + aprilRuns.length + '</div>' +
+        '<div style="font-size:12px;opacity:.9;">Birk rows: ' + birkRows.length + ', runs: ' + birkRuns.length + '</div>' +
+        '<div style="font-size:12px;opacity:.9;">Birk fallback projected coords filled: ' + birkFilled + '</div>';
+
+      L.control.layers({}, {
+        'April (Hallermeier-era)': aprilLayer,
+        'May11 Birkemeier (_birk_toe)': birkLayer
+      }, { position: 'topleft' }).addTo(map);
+    }).catch(function(err) {
+      var panel = document.getElementById('info-panel');
+      panel.innerHTML = '<b>Failed to load compare files.</b><br>' + String(err);
+      console.error(err);
+    });
+  </script>
+</body>
+</html>

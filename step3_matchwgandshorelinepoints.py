@@ -16,6 +16,7 @@ import matplotlib.cm as cm
 from scipy.spatial import cKDTree
 from tqdm.contrib.concurrent import process_map
 from itertools import chain
+from depthofclosure_settings import CD_METHOD, CD_METHOD_SUFFIX
 
 # input
 inputcoastlineloc = r"input/coastline"
@@ -43,7 +44,8 @@ shorelinepointfilename = os.path.splitext(
 
 # wave gauge input location and filename pattern
 inputWGloc = r"input/wavedata/WGselected"
-wavedatafilename = f"wavedatasum_{shorelinepointfilename}_1979-01-01_2024-01-01.gpkg"
+_cd_suffix = CD_METHOD_SUFFIX[CD_METHOD]
+wavedatafilename = f"wavedatasum_{shorelinepointfilename}_1979-01-01_2024-01-01_{_cd_suffix}.gpkg"
 
 num_nearst_WG = 4  # number of nearest wave points to get
 extend_landward_m = 200  # meters to extend beyond start
@@ -51,7 +53,7 @@ extend_seaward_m = 2000  # meters to extend beyond end
 
 # output
 outputloc = r"output/match"
-transect_wp_gpkg = "transect_wp.gpkg"
+transect_wp_gpkg = f"transect_wp_{_cd_suffix}.gpkg"
 
 
 # current folder
