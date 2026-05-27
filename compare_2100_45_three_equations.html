@@ -43,12 +43,12 @@
     var percentileLabel = "0.5";
     var regionPath = "nzccd-coastal-change-rates.csv";
 
-    // Main equation outputs plus birk_toe overlay for comparison.
+    // Latest three equation outputs for comparison.
     var datasets = [
       {
         key: "hallermeier_inner",
         label: "Hallermeier Inner (hallin)",
-        path: "output/birkemeier_latest/NZ_medium_confidence_y2100_s4.5_p0.5_hallin.csv",
+        path: "output/doc_eq/NZ_medium_confidence_y2100_s4.5_p0.5_hallin.csv",
         style: {
           color: "#ff7f0e",
           weight: 4.6,
@@ -60,7 +60,7 @@
       {
         key: "hallermeier_outer",
         label: "Hallermeier Outer (hallout)",
-        path: "output/birkemeier_latest/NZ_medium_confidence_y2100_s4.5_p0.5_hallout.csv",
+        path: "output/doc_eq/NZ_medium_confidence_y2100_s4.5_p0.5_hallout.csv",
         style: {
           color: "#2ca02c",
           weight: 4.6,
@@ -72,21 +72,9 @@
       {
         key: "birkemeier_1985",
         label: "Birkemeier 1985 (birk)",
-        path: "output/birkemeier_latest/NZ_medium_confidence_y2100_s4.5_p0.5_birk.csv",
+        path: "output/doc_eq/NZ_medium_confidence_y2100_s4.5_p0.5_birk.csv",
         style: {
           color: "#1f77b4",
-          weight: 4.6,
-          opacity: 1.0,
-          lineCap: "round",
-          lineJoin: "round"
-        }
-      },
-      {
-        key: "birkemeier_toe",
-        label: "Birkemeier Toe (birk_toe)",
-        path: "output/birkemeier_latest/NZ_medium_confidence_y2100_s4.5_p0.5_birk_toe.csv",
-        style: {
-          color: "#9467bd",
           weight: 4.6,
           opacity: 1.0,
           lineCap: "round",
