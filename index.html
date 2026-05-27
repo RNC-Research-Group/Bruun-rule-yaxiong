@@ -191,7 +191,7 @@
       may11_birkemeier: 'May 11 outputs (Birkemeier)',
       compare: 'Compare both outputs'
     }
-    var activeDataset = 'compare'
+    var activeDataset = 'may11_birkemeier'
     var SCENARIO_COLORS = {
       '1.9': '#1b7837',
       '2.6': '#4dac26',
@@ -236,9 +236,9 @@
       div.innerHTML = `
         <label for="dataset-select">Data source</label>
         <select id="dataset-select">
-          <option value="compare" selected>Compare both outputs</option>
+          <option value="compare">Compare both outputs</option>
           <option value="april_hallermeier">April outputs (Hallermeier-era)</option>
-          <option value="may11_birkemeier">May 11 outputs (Birkemeier)</option>
+          <option value="may11_birkemeier" selected>May 11 outputs (Birkemeier)</option>
         </select>
         <label for="year-select">Year</label>
         <select id="year-select">
