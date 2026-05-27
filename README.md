@@ -9,6 +9,11 @@ End-to-end workflow for NZCCD shoreline projection using:
 
 This README describes the current code behavior (inputs, calculations, outputs, and where to configure options).
 
+## View Latest Maps
+
+- Main map (latest public): https://rnc-research-group.github.io/Bruun-rule-yaxiong/
+- Equation comparison map (2100 / SSP4.5): https://rnc-research-group.github.io/Bruun-rule-yaxiong/compare_2100_45_three_equations.html
+
 ## Quick Start (Non-Technical)
 
 If you only need the big picture, this is the workflow:
@@ -55,7 +60,7 @@ flowchart TD
   E --> F[output/dunepeak/shoretoe_elev_combined.gpkg]
 
   G[input/SLR_OCC/NZ_VLM_final_May24.csv + NZSeaRise_proj_novlm.csv] --> H[preprocess2_SLRscenario.py]
-  H --> I[input/SLR/{confidence}_y_{year}_s_{scenario}.gpkg]
+  H --> I[input/SLR confidence-year-scenario.gpkg]
 
   F --> J[preprocess2_matchSLRandshorelinepoints.py]
   G --> J
@@ -66,22 +71,22 @@ flowchart TD
   M --> O[input/wavedata/WGselected/WGselected_merged.gpkg]
 
   O --> P[step2_H12handT12h.py]
-  Q[input/wavedata/whacs_{hs,t01,t02,fp,t0m1}/*.nc] --> P
-  P --> R[input/wavedata/WGselected/wavedatasum_*_{suffix}.gpkg]
+  Q[input/wavedata WHACS netCDF files hs t01 t02 fp t0m1] --> P
+  P --> R[input/wavedata/WGselected/wavedatasum suffix.gpkg]
 
   C --> S[step3_matchwgandshorelinepoints.py]
   R --> S
-  S --> T[output/match/transect_wp_{suffix}.gpkg]
+  S --> T[output/match/transect_wp suffix.gpkg]
 
   T --> U[step4_bruunrule.py]
   F --> U
-  U --> V[output/bruunrule/bruunrule_{suffix}.gpkg]
+  U --> V[output/bruunrule/bruunrule suffix.gpkg]
 
   V --> W[step5_addSLR.py]
   K --> W
   I --> W
-  W --> X[output/bruunrule/NZ_{confidence}_y{year}_s{scenario}_p{percentile}_{suffix}.csv]
-  W --> Y[output/bruunrule/bruunrule_{confidence}_y_{year}_s_{scenario}_p_{percentile}.gpkg]
+  W --> X[output/bruunrule NZ confidence-year-scenario-percentile-suffix.csv]
+  W --> Y[output/bruunrule bruunrule confidence-year-scenario-percentile.gpkg]
 ```
 
 ### Equation + SLR Branching
