@@ -384,6 +384,9 @@ else:
 
 
 # savedata
+# Keep coordinate columns synchronized with the final geometry CRS.
+lastestuniquepoints["point_X"] = lastestuniquepoints.geometry.x
+lastestuniquepoints["point_Y"] = lastestuniquepoints.geometry.y
 lastestuniquepoints.to_file(
     os.path.join(grandparent_folder, outputloc, outputfilename), driver="gpkg"
 )

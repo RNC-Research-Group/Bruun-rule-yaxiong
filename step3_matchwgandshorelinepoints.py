@@ -84,7 +84,8 @@ if coastline.crs != lastestuniquepoints.crs:
     coastline = coastline.to_crs(lastestuniquepoints.crs)
 
 if gdf_WG.crs != lastestuniquepoints.crs:
-    gdf_WG = coastline.to_crs(gdf_WG.crs)
+    # Reproject wave-gauge points into shoreline CRS for consistent distance math.
+    gdf_WG = gdf_WG.to_crs(lastestuniquepoints.crs)
 print("coastline CRS:", coastline.crs)
 print("shoreline points CRS:", lastestuniquepoints.crs)
 print("WG CRS:", gdf_WG.crs)

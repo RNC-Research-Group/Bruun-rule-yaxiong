@@ -114,11 +114,25 @@ flowchart TD
 
 ## 2) Input Files and Where They Are Used
 
+### Shoreline/rates data roles (quick reference)
+
+| File | Record structure | Coordinate meaning | Primary use in workflow |
+|---|---|---|---|
+| `slpoints_rates.csv.gz` | Multiple rows per `Unique_ID` (shoreline-transect intersection history with rates and dates) | Latest XY per transect = current shoreline position | Build `latestuniquepoints_merged.gpkg`; provide current shoreline start point for dune-crest profile sampling |
+| `nzccd_rates_proxy.parquet` | One row per transect (`UniqueID`) with transect-level attributes and proxy geometry | XY = MHWS proxy location for the transect | Sample DEM at MHWS proxy to produce `B_mhws_elev_m` (berm proxy) for `mhws_parquet` Bruun runs |
+
 ### Core shoreline/rates inputs
 
 - `slpoints_rates.csv.gz`
   - Used by: `preprocess1_getlatestshorelinepoints.py`
-  - Purpose: source shoreline points + rates fields (`WLR`, `Duration`, `Region`, dates, geometry columns).
+  - Content: many shoreline-transect intersection points per `Unique_ID` (time/history rows), including rates-of-change and date fields (`WLR`, `NSM`, `Duration`, `Date`, `Start_date`, `End_date`, etc.).
+  - How coordinates are used: the latest point coordinate per transect is selected as the current shoreline position; that XY is the starting point for landward profile sampling used to find dune crest elevation.
+
+- `nzccd_rates_proxy.parquet`
+  - Updated by: `preprocess1_getlatestshorelinepoints.py`
+  - Content: one proxy record per transect (`UniqueID`) with transect-level attributes (including rates-related fields) and shoreline-proxy geometry.
+  - How coordinates are used: proxy XY represents MHWS location for that transect, and DEM sampled at this location becomes `B_mhws_elev_m` (berm proxy).
+  - Bruun usage: this feeds the `mhws_parquet` B-source path (berm/MHWS-based runs; default for `hallermeier_inner` and `birkemeier_1985` in current settings).
 
 - `input/shorelinepoints/latestuniquepoints_merged.gpkg`
   - Produced by: `preprocess1_getlatestshorelinepoints.py`
@@ -141,11 +155,6 @@ flowchart TD
   - Reference links:
     - LINZ Data Service (LDS): https://data.linz.govt.nz/
     - LINZ seabed/bathymetry overview: https://www.linz.govt.nz/products-services/data/types-linz-data/hydrographic-data
-
-- `nzccd_rates_proxy.parquet`
-  - Updated by: `preprocess1_getlatestshorelinepoints.py`
-  - Used by: `preprocess2_dunepeak.py`
-  - Purpose: MHWS proxy points (`geometry`) and IDs for `B_mhws_elev_m` join.
 
 ### Wave inputs
 
@@ -190,9 +199,11 @@ flowchart TD
 - Reads `slpoints_rates.csv.gz`.
 - Validates required columns.
 - Keeps latest row per `Unique_ID` by date.
+- Interprets `slpoints_rates.csv.gz` as shoreline-transect intersection history (multiple rows per transect with rates/date fields).
+- Uses the latest XY per transect as the current shoreline coordinate.
 - Computes transect unit direction vectors (`ux1`, `uy1`) using landward vs seaward distance ordering.
 - Writes `input/shorelinepoints/latestuniquepoints_merged.gpkg`.
-- Updates `nzccd_rates_proxy.parquet` with latest shoreline XY/date for consistent downstream ID alignment.
+- Updates `nzccd_rates_proxy.parquet` (one proxy row per transect) with latest shoreline XY/date for consistent downstream ID alignment.
 
 ### B. Dune and berm elevation derivation
 
@@ -220,8 +231,8 @@ This step computes both elevation families so downstream equations can choose ei
 - Uses average around peak (`CREST_AVG_SIDE_POINTS=5`) as stabilized dune elevation.
 
 4. Additional sampled fields:
-- `shoreline_elev_m`: value sampled at shoreline XY from `nzbathy_2016.tif`.
-- `B_mhws_elev_m`: coastal DEM value sampled at MHWS proxy XY from `nzccd_rates_proxy.parquet`.
+- `shoreline_elev_m`: value sampled at the current shoreline XY (latest point from `slpoints_rates.csv.gz`) from `nzbathy_2016.tif`.
+- `B_mhws_elev_m`: coastal DEM value sampled at MHWS proxy XY (from `nzccd_rates_proxy.parquet`) and used as the berm proxy for `mhws_parquet` runs.
 
 5. Output:
 - `output/dunepeak/shoretoe_elev_combined.gpkg`

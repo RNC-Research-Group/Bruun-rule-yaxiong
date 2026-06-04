@@ -160,6 +160,9 @@ ax.get_figure().savefig(
     bbox_inches="tight",
 )
 # savedata
+# Keep coordinate columns synchronized with shoreline geometry CRS.
+matched["point_X"] = matched.geometry.x
+matched["point_Y"] = matched.geometry.y
 matched.to_file(
     os.path.join(grandparent_folder, outputloc, outputfilename), driver="gpkg"
 )
