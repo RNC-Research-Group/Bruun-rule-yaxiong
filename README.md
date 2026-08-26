@@ -424,3 +424,73 @@ Run `run_all_equations.py`.
 - `output/match/`: wave-to-transect matched datasets
 - `output/bruunrule/`: equation-specific Bruun and SLR-projected exports
 - `output/doc_eq/`: map-ready curated CSV set for web maps
+
+## 10) Validation and Analysis Notebooks
+
+These notebooks are a separate, read-only-ish workflow layered on top of the main pipeline
+outputs above (`output/doc_eq/`, etc.). They do not modify `step1`-`step5` or their outputs.
+
+### `bruunvalidation.ipynb` - which Bruun equation best matches observed shoreline change
+
+Applies each of the three Bruun/CD equations with a pure `R_bruun * SLR` prediction (no
+fitted/free parameters, no historic-trend term) on a 1980-2000 window and a 2000-2024
+window, and compares both against real observed NZCCD shoreline change, to see which
+equation (`hallermeier_inner`, `hallermeier_outer`, `birkemeier_1985`) best reproduces
+actual shoreline behaviour.
+
+- Historic shoreline positions: `slpoints_rates.csv.gz` (individual dated intersection
+  points per transect, not the single whole-record `WLR`/`NSM` rate).
+- Real per-transect trends: fits its own linear-regression rate (m/yr) separately for
+  points dated <=2000 and >2000, instead of relying on NZCCD's single whole-record rate
+  or a plain two-point secant. This is the ground truth for both periods - never derived
+  from a Bruun equation.
+- Prediction for both periods is `R_bruun * SLR forcing` only. An earlier version of this
+  notebook additionally added a historic-trend extrapolation term on top for the
+  validation period, which double-counted SLR-driven retreat (the historic trend already
+  reflects whatever SLR was doing historically); that has been removed.
+- Equation parameters (`R_bruun`, `CD`, `B`, `L`): from `output/doc_eq/NZ_*_{hallin|hallout|birk}.csv`,
+  treated as time-invariant (same 2016 DEM elevation, same national D50, full 1979-2024
+  WHACS-derived CD) for both the training and validation windows - only the SLR forcing
+  term differs by period.
+- SLR forcing: `preprocess2_pre2000SLR.py` (PSMSL NZ tide-gauge trends, nearest-gauge
+  per transect) for 1980-2000 - a genuine SLR delta over that exact window; `NZSeaRise_proj_novlm.csv`
+  2020 medium-confidence value for 2000-2024 - an absolute SLR snapshot used as a proxy
+  for the SLR forcing over that window (NZSeaRise only has 2020+ rows, so this is not an
+  exact 24-year delta the way the training term is; a known asymmetry, not yet resolved).
+  Both kept VLM-agnostic for now (see `/memories/repo/bruun_validation_slr.md`).
+- Outputs (`output/validation/`):
+  - `pre2000_slr_trends.csv`, `pre2000_slr_by_transect.csv` (from `preprocess2_pre2000SLR.py`)
+  - `nzccd_observed_pre2000_post2000_targets.csv`
+  - `bruun_parameters_with_slr2020.csv`
+  - `bruun_validation_rows_pre2000_to_2024.csv` (full per-transect/per-equation table)
+  - `bruun_training_metrics_by_equation.csv`, `bruun_validation_metrics_by_equation.csv`
+  - `best_equation_obs_vs_pred_2000_2024.png`
+
+### `bruunanalysis.ipynb` - figures and spatial diagnostics
+
+Reads the CSVs exported by `bruunvalidation.ipynb` (does not recompute anything) and builds:
+
+- Training vs validation error (bias/MAE/RMSE) bar charts per equation.
+- Observed vs predicted scatter (validation period), per equation.
+- Residual distribution violin plots (training vs validation), per equation.
+- Spatial map of validation residuals for the best-performing equation.
+- Pre-2000 vs post-2000 observed erosion-rate comparison (acceleration check).
+- Parameter correlates of match quality: joins beach slope (`tanbeta`) and wave height
+  (`Hs_12h_y`) from the raw `output/bruunrule/bruunrule_{suffix}.gpkg` and
+  `input/wavedata/WGselected/wavedatasum_*_{suffix}.gpkg` files, then correlates
+  `|predicted - observed|` against `B`, `CD`, `L`, `tanbeta`, `Hs_12h_y` (heatmap,
+  good-vs-poor-match boxplots, and binned-trend scatter for profile length and slope -
+  shorter profiles and steeper slopes correlate with better matches).
+- Distribution of observed vs predicted change (min/p25/median/mean/p75/max/std) per equation.
+- Error-magnitude breakdown: % of transects within 5/10/20/50 m, and a signed
+  over-/under-prediction breakdown (how much of the error is over- vs under-predicted
+  erosion, and by how much).
+- Regional breakdown: match quality (median/mean `|predicted - observed|`) by NZCCD
+  `Region`, merged in from `slpoints_rates.csv.gz`.
+- Figures saved to `output/validation/figures/`.
+
+### `preprocess2_pre2000SLR.py` - pre-2000 SLR baseline
+
+Standalone script (not part of `run_all_equations.py`) that downloads PSMSL NZ tide-gauge
+monthly records, fits a 1980-2000 linear trend per station, and assigns each shoreline
+transect its nearest gauge's trend. Required before running `bruunvalidation.ipynb`.
